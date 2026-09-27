@@ -10,6 +10,36 @@
 #include <ps5/kernel.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include "sony_scope.h"
+
+#ifndef LAPY_PROBE_SONY
+#define LAPY_PROBE_SONY 0
+#endif
+
+#if LAPY_PROBE_SONY
+static uintptr_t current_credential(void *unused)
+{
+    (void)unused;
+    return (uintptr_t)kernel_get_proc_ucred(getpid());
+}
+static int clone_credential(void *unused)
+{
+    (void)unused;
+    return seteuid(geteuid()) < 0 ? errno : 0;
+}
+static int read_sony(void *unused, uintptr_t id, struct lapy_sony_fields *f)
+{
+    if (current_credential(unused) != id) return ESTALE;
+    return kernel_copyout(id + KERNEL_OFFSET_UCRED_CR_SCEAUTHID, &f->authority, sizeof(f->authority)) ||
+           kernel_copyout(id + KERNEL_OFFSET_UCRED_CR_SCECAPS, f->caps, sizeof(f->caps)) ? EFAULT : 0;
+}
+static int write_sony(void *unused, uintptr_t id, const struct lapy_sony_fields *f)
+{
+    if (current_credential(unused) != id) return ESTALE;
+    return kernel_copyin(&f->authority, id + KERNEL_OFFSET_UCRED_CR_SCEAUTHID, sizeof(f->authority)) ||
+           kernel_copyin(f->caps, id + KERNEL_OFFSET_UCRED_CR_SCECAPS, sizeof(f->caps)) ? EFAULT : 0;
+}
+#endif
 
 static int directories(intptr_t *root, intptr_t *jail)
 {
@@ -24,14 +54,27 @@ int main(void)
 {
     int root = -1, cwd = -1, error = 0, restore_error = 0, changed = 0;
     int jail_preserved = 0, data_access = 0, sandbox_established = 0;
+    int sony_restore_error = 0;
+#if LAPY_PROBE_SONY
+    struct lapy_sony_scope sony = {0};
+    const struct lapy_sony_ops sony_ops = {NULL, current_credential, clone_credential, read_sony, write_sony};
+#endif
     intptr_t sandbox_root = 0, sandbox_jail = 0, final_root = 0, final_jail = 0;
     struct stat original, current, data_before, data_after, cwd_before, cwd_after;
     const char *stage = "prepare";
     if (ps5log_init_default("LAPYROOT", "lapy-cross-root-probe")) return 2;
-    ps5log_printf(PS5LOG_MARK, "probe_start build=%s firmware=%08x mode=cross-root",
-                  LAPY_PROBE_ID, kernel_get_fw_version());
+    ps5log_printf(PS5LOG_MARK, "probe_start build=%s firmware=%08x mode=cross-root sony_scope=%d",
+                  LAPY_PROBE_ID, kernel_get_fw_version(), LAPY_PROBE_SONY);
     stage = "prerequisites";
     if ((error = log_vfs_prerequisites())) goto done;
+#if LAPY_PROBE_SONY
+    stage = "sony_scope_begin";
+    struct lapy_sony_fields desired = {.authority = UINT64_C(0x4801000000000013)};
+    memset(desired.caps, 0xff, sizeof(desired.caps));
+    if ((error = lapy_sony_scope_begin(&sony, &sony_ops, &desired))) goto done;
+    ps5log_printf(PS5LOG_MARK, "sony_scope active=1 credential_replaced=1");
+    if ((error = log_vfs_prerequisites())) goto done;
+#endif
     stage = "fchdir_negative_control";
     error = lapy_vfs_fchdir(-1);
     ps5log_printf(PS5LOG_MARK, "vfs_negative_control actual=%d expected=%d", error, EBADF);
@@ -95,10 +138,13 @@ done:
     }
     if (cwd >= 0) close(cwd);
     if (root >= 0) close(root);
-    ps5log_printf(error || restore_error ? PS5LOG_ERR : PS5LOG_MARK,
-                  "probe_result build=%s stage=%s error=%d restore_error=%d sandbox=%d jail_preserved=%d data_access=%d",
-                  LAPY_PROBE_ID, stage, error, restore_error,
+#if LAPY_PROBE_SONY
+    sony_restore_error = lapy_sony_scope_end(&sony, &sony_ops);
+#endif
+    ps5log_printf(error || restore_error || sony_restore_error ? PS5LOG_ERR : PS5LOG_MARK,
+                  "probe_result build=%s stage=%s error=%d restore_error=%d sony_restore_error=%d sandbox=%d jail_preserved=%d data_access=%d",
+                  LAPY_PROBE_ID, stage, error, restore_error, sony_restore_error,
                   sandbox_established, jail_preserved, data_access);
-    ps5log_close(error || restore_error ? "probe-failed" : "probe-complete");
-    return error || restore_error ? 1 : 0;
+    ps5log_close(error || restore_error || sony_restore_error ? "probe-failed" : "probe-complete");
+    return error || restore_error || sony_restore_error ? 1 : 0;
 }

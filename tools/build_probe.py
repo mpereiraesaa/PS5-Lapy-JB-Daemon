@@ -20,15 +20,20 @@ def main():
     parser.add_argument("--exclusive-receiver", action="store_true",
                         help="test explicit CLOEXEC setup in this non-execing probe only")
     parser.add_argument("--probe", choices=("transport", "credentials", "vfs", "cross-root"), default="transport")
+    parser.add_argument("--sony-privileges", action="store_true",
+                        help="temporarily change Sony fields after native credential replacement, cross-root probe only")
     args = parser.parse_args()
     if args.probe != "transport" and args.exclusive_receiver:
         parser.error("--exclusive-receiver requires --probe transport")
+    if args.sony_privileges and args.probe != "cross-root":
+        parser.error("--sony-privileges requires --probe cross-root")
     sdk = Path(args.sdk).resolve()
     logging = args.logging_client.resolve()
     names = {"transport": ("native_probe.c", "native_directory.c", "native_directory.h"),
              "credentials": ("credential_probe.c",),
              "vfs": ("vfs_probe.c", "native_vfs_syscall.h"),
-             "cross-root": ("cross_root_probe.c", "native_vfs_syscall.h", "vfs_prerequisites.h")}[args.probe]
+             "cross-root": ("cross_root_probe.c", "native_vfs_syscall.h", "vfs_prerequisites.h",
+                            "sony_scope.c", "sony_scope.h")}[args.probe]
     files = [ROOT / "source" / name for name in names]
     inputs = {str(p.relative_to(ROOT)): sha(p) for p in files}
     inputs["external/ps5log.h"] = sha(logging / "ps5log.h")
@@ -38,6 +43,8 @@ def main():
     flags = ["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror"]
     if args.exclusive_receiver:
         flags.append("-DLAPY_PROBE_EXCLUSIVE=1")
+    if args.sony_privileges:
+        flags.append("-DLAPY_PROBE_SONY=1")
     identity = hashlib.sha256(json.dumps({"inputs": inputs, "sdk": sdk_inputs,
                                          "flags": flags}, sort_keys=True).encode()).hexdigest()
     stem = {"transport": "native", "credentials": "credential", "vfs": "vfs",

@@ -22,6 +22,8 @@ check-native:
 	mkdir -p build/host
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -g -fsanitize=address,undefined -Isource source/native_directory.c tests/test_native_directory.c -o build/host/test_native_directory
 	./build/host/test_native_directory
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -g -fsanitize=address,undefined -Isource source/sony_scope.c tests/test_sony_scope.c -o build/host/test_sony_scope
+	./build/host/test_sony_scope
 
 # Compile the transport component only; this is not an elevation payload.
 native-components:
