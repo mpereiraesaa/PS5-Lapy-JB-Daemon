@@ -88,6 +88,27 @@ exit-only restoration, or automatic fallback to legacy writes belong in the
 native backend. The [credential-copy commit](https://github.com/blackbearreloaded/kstuff-lite/commit/33ec81e5e086837f54644d519ed0a90b16d5c1f5)
 still writes filesystem directory pointers directly and is insufficient alone.
 
+### Limit of an `fchdir` reference shuttle
+
+FreeBSD's native `fchdir` acquires a reference for its new `fd_cdir` and
+releases the previous one. With an exclusive, quiescent `filedesc`, a valid
+root directory FD in the **target**, and non-null original `fd_rdir` and
+`fd_jdir`, moving the owned `fd_cdir` reference into each root slot between
+native `fchdir` calls could in principle balance the old and new vnode refs.
+This is a candidate transaction, not a tested PS5 backend. It still requires
+verified target unsharing, all-thread quiescence, safe slot publication, checked
+remote syscall results, and rollback or a safe forward-completion path.
+
+It **cannot** cover a null original `fd_jdir` by pointer swaps and `fchdir`
+alone. Those operations preserve the number of owning references across the
+three directory slots; filling an initially null jail slot increases that
+number by one. Swapping null into `fd_cdir` is not a valid workaround: the
+FreeBSD `pwd_chdir` release path calls `vrele` on the previous cwd, and its
+`vputx` implementation asserts the vnode is non-null. Such a case needs a
+native reference-acquisition path (or a separately verified native root-change
+operation). Until PS5 confirms the relevant behavior, the generic daemon must
+reject that state rather than run the shuttle.
+
 ## Acceptance and evidence
 
 Start native validation from a clean boot, with exclusive console coordination.
