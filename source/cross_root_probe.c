@@ -4,6 +4,7 @@
 #include "ps5log.h"
 #include "probe_identity.h"
 #include "native_vfs_syscall.h"
+#include "vfs_prerequisites.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <ps5/kernel.h>
@@ -29,6 +30,14 @@ int main(void)
     if (ps5log_init_default("LAPYROOT", "lapy-cross-root-probe")) return 2;
     ps5log_printf(PS5LOG_MARK, "probe_start build=%s firmware=%08x mode=cross-root",
                   LAPY_PROBE_ID, kernel_get_fw_version());
+    stage = "prerequisites";
+    if ((error = log_vfs_prerequisites())) goto done;
+    stage = "fchdir_negative_control";
+    error = lapy_vfs_fchdir(-1);
+    ps5log_printf(PS5LOG_MARK, "vfs_negative_control actual=%d expected=%d", error, EBADF);
+    if (error != EBADF) { if (!error) error = EPROTO; goto done; }
+    error = 0;
+    stage = "prepare";
     root = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (root < 0) { error = errno; goto done; }
     cwd = open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);

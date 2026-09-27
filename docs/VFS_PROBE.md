@@ -56,3 +56,14 @@ the caller's native identity and Sony privilege prerequisites. SDK startup
 changes selected capability bytes; full chroot privileges cannot be inferred
 from successful loading, /data visibility or seteuid(current). Do not substitute
 raw vnode writes or claim the lifetime problem is fixed.
+
+The prerequisites diagnostic (build
+`4ce53bde24a87b877ee59eed0de1d8665e5ab5f9163e05e7e6a669643be001f8`, ELF
+`2108cabac22a1aa32d6efe8f906402032f902458a92eb4cbc3e4a3f2eeef65ce`)
+observed effective UID 0, real UID nonzero, non-system Sony authority, incomplete
+Sony capabilities, and attribute bit 0x80 set. fchdir(-1) correctly returned
+EBADF, followed by chroot EPERM. Both queried chroot/superuser sysctls returned
+ENOENT, so their policy values remain unknown. The clean private ps5log SHA256
+is `e5dbe16b7fe3a86ea6d7134bcd4a306107ea61eb4d598275ed63b35d39034249`.
+These observations motivate testing Sony privileges on a natively cloned
+credential; they do not identify the exact permission check that rejects chroot.

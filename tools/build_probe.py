@@ -28,7 +28,7 @@ def main():
     names = {"transport": ("native_probe.c", "native_directory.c", "native_directory.h"),
              "credentials": ("credential_probe.c",),
              "vfs": ("vfs_probe.c", "native_vfs_syscall.h"),
-             "cross-root": ("cross_root_probe.c", "native_vfs_syscall.h")}[args.probe]
+             "cross-root": ("cross_root_probe.c", "native_vfs_syscall.h", "vfs_prerequisites.h")}[args.probe]
     files = [ROOT / "source" / name for name in names]
     inputs = {str(p.relative_to(ROOT)): sha(p) for p in files}
     inputs["external/ps5log.h"] = sha(logging / "ps5log.h")
