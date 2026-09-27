@@ -15,7 +15,9 @@ through the SDK's per-firmware process and filedesc accessors. The probe never
 writes kernel memory. It reads the first 0x1c4 bytes of the root vnode once per
 second for 120 seconds, emitting only changes of small 32-bit values through
 ps5log/1. The SDK FreeBSD header suggests hold/use fields at 0x1bc/0x1c0; the
-log labels these hints **unverified**. No kernel pointer values are transmitted.
+log labels these hints **unverified** and prints their values only when both
+look like small counters. Otherwise it records `status=unavailable` without
+field values. No kernel pointer values are transmitted.
 
 After console recovery, use a **clean boot** and the shared `console:PS5`
 lease. Run at most a few ordinary launch/close escalations during the bounded
