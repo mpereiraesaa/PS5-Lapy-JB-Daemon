@@ -29,6 +29,18 @@ failure or unexpected count stops this path for that firmware. Preserve the
 server's stream and manifest together with the ELF manifest; do not infer a
 successful result from a screenshot or an ELF build alone.
 
+After the run, verify the four matching artifacts together:
+
+```sh
+python3 tools/analyze_filedesc_unshare.py STREAM.log SERVER.json \
+  build/filedesc_unshare-probe/manifest.json \
+  build/filedesc_unshare-probe/lapy_filedesc_unshare_probe.elf
+```
+
+The analyzer rejects stream gaps, unclean termination, identity/hash mismatch,
+and any success claim that lacks the exact native 1→2→separate-1 transition.
+It reports a cleanly logged syscall error as `supported: false`.
+
 A successful self-test still leaves three requirements for the daemon: invoke
 the unshare in the **target** process, hold that process and its threads stable
 while changing the directory fields, and acquire/release vnode references
