@@ -120,6 +120,8 @@ int main(void)
         error = errno; goto done;
     }
     }
+    stage = "directory_fd_inventory";
+    if ((error = log_directory_fd_inventory())) goto done;
     stage = "sandbox_chroot";
     ps5log_printf(PS5LOG_MARK, "probe_operation stage=%s", stage);
     if ((error = lapy_vfs_chroot("/data"))) goto done;

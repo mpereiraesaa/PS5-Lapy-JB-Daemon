@@ -4,10 +4,39 @@
 #include <errno.h>
 #include <ps5/kernel.h>
 #include <sys/sysctl.h>
+#include <sys/stat.h>
+#include <sys/resource.h>
 #include <unistd.h>
 
 /* Implemented by the pinned SDK CRT, though omitted from its public header. */
 extern intptr_t kernel_get_ucred_prison(pid_t pid);
+
+static int log_directory_fd_inventory(void)
+{
+    errno = 0;
+    int limit = getdtablesize(), open_count = 0, directories = 0;
+    int table_error = limit < 0 ? errno : 0;
+    struct rlimit rlim = {0};
+    int rlim_error = getrlimit(RLIMIT_NOFILE, &rlim) < 0 ? errno : 0;
+    ps5log_printf(PS5LOG_MARK, "vfs_fd_limit table=%d table_error=%d rlimit=%llu rlimit_error=%d",
+                  limit, table_error, (unsigned long long)rlim.rlim_cur, rlim_error);
+    if (!rlim_error && rlim.rlim_cur > 0 && rlim.rlim_cur <= 32768 &&
+        (limit <= 0 || rlim.rlim_cur > (rlim_t)limit))
+        limit = (int)rlim.rlim_cur;
+    if (limit <= 0 || limit > 32768) return E2BIG;
+    for (int fd = 0; fd < limit; ++fd) {
+        struct stat st;
+        if (fstat(fd, &st) < 0) {
+            if (errno == EBADF) continue;
+            return errno;
+        }
+        ++open_count;
+        if (S_ISDIR(st.st_mode)) ++directories;
+    }
+    ps5log_printf(PS5LOG_MARK, "vfs_descriptors scanned=%d open=%d directories=%d",
+                  limit, open_count, directories);
+    return 0;
+}
 
 /* Diagnostic booleans only; no kernel addresses or credential values leave
  * the process. Unavailable sysctls are reported, not assumed. */

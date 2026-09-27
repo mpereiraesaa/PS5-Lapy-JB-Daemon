@@ -58,3 +58,33 @@ the controls. chroot has one argument and a handler distinct from slots
 is not supported. A distinct handler does not prove a working implementation
 or explain EPERM. Clean private log SHA256:
 `61f7ded3fb89778f0230310a13bb4aa1ecbaaa1ae43680081fc8ca6387bf5ef7`.
+
+## Descriptor and active-dispatch follow-up
+
+The fd inventory uses the larger available value from getdtablesize and
+RLIMIT_NOFILE, rejects bounds over 32768, and fstats each descriptor without
+closing inherited descriptors. The observed bounds were 12555 and 13952.
+An earlier 4096 cap stopped the probe before chroot; it was not a syscall
+failure. With the corrected bound, 13952 slots contained eight open descriptors
+and **zero directories**, but chroot still returned EPERM. Build
+`c643c1d3f0867645c92e693e4e72da65fb8388b8c18d2b99a9b695a6a02611d6`, ELF
+`de5de0e57aed0af515a79b580b3d0de6c8b15cf8e7f93d874267eab46b9cff68`, clean log
+`d0b666d0ee887a6412ca16dadd89e8afea41ae74b45e8a5c8205f22dfa6642b5`.
+This does not support the inherited-directory hypothesis within those bounds.
+
+The syscall classifier now reads the current process's actual p_sysent using
+the pinned 12.02 offset. It validates vector size and pointer form, understands
+the documented kstuff 0xdeb7 table marker, and compares active chroot against
+both stock PS5 and PS4 entries. It observed the **PS5 vector and stock PS5
+chroot handler**, without the marker. Thus the compatibility-dispatch hypothesis
+does not explain this payload's failure. Build
+`9db1aa2d8bcb42d7fa8603761b58a0a7d1990b74467187a8c738bf73cc208e35`, ELF
+`1a109c0fe5929c5b08777e70d59834d72d98278e945b6857bdac583704b12cea`, clean log
+`dac9c3cd737ce4f1eaff190107f7fe9c80da9d433cbc611056d704e7abafaca8`.
+
+Further progress on chroot requires identifying its actual rejection path,
+not repeating the same credential combinations. Pinned prosper0gdb offers
+kernel tracing/calls but is not an ordinary SDK API: its setup changes IDT/TSS
+state across CPUs and cannot be assumed compatible with installed hooks.
+No such instrumentation has been deployed by these probes. A kernel tracing
+backend needs a separate integration/cleanup audit before execution.
