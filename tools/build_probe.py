@@ -19,7 +19,7 @@ def main():
     parser.add_argument("--logging-client", type=Path, required=True)
     parser.add_argument("--exclusive-receiver", action="store_true",
                         help="test explicit CLOEXEC setup in this non-execing probe only")
-    parser.add_argument("--probe", choices=("transport", "credentials", "vfs", "cross-root", "sysent", "root-refs", "kernel-symbols"), default="transport")
+    parser.add_argument("--probe", choices=("transport", "credentials", "vfs", "cross-root", "sysent", "root-refs", "kernel-symbols", "filedesc-unshare"), default="transport")
     parser.add_argument("--sony-privileges", action="store_true",
                         help="temporarily change Sony fields after native credential replacement, cross-root probe only")
     parser.add_argument("--root-identity", action="store_true",
@@ -43,7 +43,8 @@ def main():
              "cross-root": ("cross_root_probe.c", "native_vfs_syscall.h", "vfs_prerequisites.h",
              "sony_scope.c", "sony_scope.h"), "sysent": ("sysent_probe.c",),
              "root-refs": ("root_reference_probe.c",),
-             "kernel-symbols": ("kernel_symbol_probe.c",)}[args.probe]
+             "kernel-symbols": ("kernel_symbol_probe.c",),
+             "filedesc-unshare": ("filedesc_unshare_probe.c",)}[args.probe]
     files = [ROOT / "source" / name for name in names]
     inputs = {str(p.relative_to(ROOT)): sha(p) for p in files}
     inputs["external/ps5log.h"] = sha(logging / "ps5log.h")
@@ -63,7 +64,8 @@ def main():
                                          "flags": flags}, sort_keys=True).encode()).hexdigest()
     stem = {"transport": "native", "credentials": "credential", "vfs": "vfs",
             "cross-root": "cross_root", "sysent": "sysent",
-            "root-refs": "root_refs", "kernel-symbols": "kernel_symbols"}[args.probe]
+            "root-refs": "root_refs", "kernel-symbols": "kernel_symbols",
+            "filedesc-unshare": "filedesc_unshare"}[args.probe]
     output = ROOT / ("build/probe" if args.probe == "transport" else f"build/{stem}-probe")
     output.mkdir(parents=True, exist_ok=True)
     header = output / "probe_identity.h"
@@ -88,7 +90,8 @@ def main():
                                             "vfs": "existing-root", "cross-root": "cross-root",
                                             "sysent": "sysent-read-only",
                                             "root-refs": "root-vnode-read-only",
-                                            "kernel-symbols": "kernel-symbol-lookup-only"}[args.probe],
+                                            "kernel-symbols": "kernel-symbol-lookup-only",
+                                            "filedesc-unshare": "self-filedesc-native-unshare"}[args.probe],
                                    "receiver": ("exclusive" if args.exclusive_receiver else "atomic")
                                                if args.probe == "transport" else None,
                                    "console_validated": False}, indent=2, sort_keys=True) + "\n")
