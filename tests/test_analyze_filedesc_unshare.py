@@ -28,9 +28,10 @@ class FileDescAnalysisTests(unittest.TestCase):
             "mode": "self-filedesc-native-unshare", "console_validated": False,
             "elf_sha256": hashlib.sha256(self.elf.read_bytes()).hexdigest()}))
         self.start = (f"1\t1\tMARK\tprobe_start build={self.build_id} "
-                      "firmware=00001202 mode=self-only ref_offset=0x24")
+                      "firmware=00001202 mode=self-only scan_bytes=128")
         self.result = (f"2\t2\tMARK\tprobe_result build={self.build_id} "
-                       "stage=wait_child error=0 initial_refs=1 shared_refs=2 "
+                       "stage=wait_child error=0 candidate_count=1 ref_offset=0x42 "
+                       "ref_width=2 initial_refs=1 shared_refs=2 "
                        "private_refs=1 old_refs=1 shared_same=1 private_new=1 "
                        "unshared=1")
         self.write_run()

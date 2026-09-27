@@ -11,7 +11,9 @@ PS5_PAYLOAD_SDK=<installed-sdk> python3 tools/build_probe.py \
 The builder writes an ignored ELF and identity manifest under
 `build/filedesc_unshare-probe/`. The probe records only `ps5log/1` evidence.
 It does not elevate credentials, write kernel memory, edit another process,
-or claim to repair Lapy.
+or claim to repair Lapy. It scans only the first 128 bytes of its own
+`filedesc` for a unique aligned 16- or 32-bit field that changes 1→2 during
+sharing, avoiding a fixed SDK structure offset. Multiple matches fail closed.
 
 On a clean boot, under the shared `console:PS5` lease, run this **once** as a
 standalone payload. It first requires its own `fd_refcnt` to be one. It creates
@@ -22,9 +24,10 @@ alarm as a bound. The parent then invokes native `rfork(RFFDG)` without
 one while the child's old table also has refcount one. The parent releases and
 reaps the child even when a check fails. No kernel pointer is logged.
 
-The SDK `struct filedesc` gives the **candidate** `fd_refcnt` offset. A success
-requires the observed transitions and pointer identities to agree with the
-FreeBSD reference behavior; it is not proof of the entire PS5 layout. A
+The SDK and kstuff-lite headers disagree on the `filedesc` layout and the
+counter's width. A success requires a unique candidate field, the observed
+transitions and pointer identities to agree with the FreeBSD reference
+behavior; it is not proof of the entire PS5 layout. A
 failure or unexpected count stops this path for that firmware. Preserve the
 server's stream and manifest together with the ELF manifest; do not infer a
 successful result from a screenshot or an ELF build alone.
