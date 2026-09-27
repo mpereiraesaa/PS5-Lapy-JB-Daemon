@@ -19,21 +19,29 @@ def main():
     parser.add_argument("--logging-client", type=Path, required=True)
     parser.add_argument("--exclusive-receiver", action="store_true",
                         help="test explicit CLOEXEC setup in this non-execing probe only")
-    parser.add_argument("--probe", choices=("transport", "credentials", "vfs", "cross-root"), default="transport")
+    parser.add_argument("--probe", choices=("transport", "credentials", "vfs", "cross-root", "sysent"), default="transport")
     parser.add_argument("--sony-privileges", action="store_true",
                         help="temporarily change Sony fields after native credential replacement, cross-root probe only")
+    parser.add_argument("--root-identity", action="store_true",
+                        help="native setgid/setuid(0) in the disposable cross-root probe before the Sony scope")
+    parser.add_argument("--cwd-root", action="store_true",
+                        help="retain original root as cwd; do not open root/cwd descriptors in cross-root probe")
     args = parser.parse_args()
     if args.probe != "transport" and args.exclusive_receiver:
         parser.error("--exclusive-receiver requires --probe transport")
     if args.sony_privileges and args.probe != "cross-root":
         parser.error("--sony-privileges requires --probe cross-root")
+    if args.root_identity and args.probe != "cross-root":
+        parser.error("--root-identity requires --probe cross-root")
+    if args.cwd_root and args.probe != "cross-root":
+        parser.error("--cwd-root requires --probe cross-root")
     sdk = Path(args.sdk).resolve()
     logging = args.logging_client.resolve()
     names = {"transport": ("native_probe.c", "native_directory.c", "native_directory.h"),
              "credentials": ("credential_probe.c",),
              "vfs": ("vfs_probe.c", "native_vfs_syscall.h"),
              "cross-root": ("cross_root_probe.c", "native_vfs_syscall.h", "vfs_prerequisites.h",
-                            "sony_scope.c", "sony_scope.h")}[args.probe]
+                            "sony_scope.c", "sony_scope.h"), "sysent": ("sysent_probe.c",)}[args.probe]
     files = [ROOT / "source" / name for name in names]
     inputs = {str(p.relative_to(ROOT)): sha(p) for p in files}
     inputs["external/ps5log.h"] = sha(logging / "ps5log.h")
@@ -45,10 +53,14 @@ def main():
         flags.append("-DLAPY_PROBE_EXCLUSIVE=1")
     if args.sony_privileges:
         flags.append("-DLAPY_PROBE_SONY=1")
+    if args.root_identity:
+        flags.append("-DLAPY_PROBE_ROOT_IDENTITY=1")
+    if args.cwd_root:
+        flags.append("-DLAPY_PROBE_CWD_ROOT=1")
     identity = hashlib.sha256(json.dumps({"inputs": inputs, "sdk": sdk_inputs,
                                          "flags": flags}, sort_keys=True).encode()).hexdigest()
     stem = {"transport": "native", "credentials": "credential", "vfs": "vfs",
-            "cross-root": "cross_root"}[args.probe]
+            "cross-root": "cross_root", "sysent": "sysent"}[args.probe]
     output = ROOT / ("build/probe" if args.probe == "transport" else f"build/{stem}-probe")
     output.mkdir(parents=True, exist_ok=True)
     header = output / "probe_identity.h"
@@ -70,7 +82,8 @@ def main():
                                    "inputs_sha256": inputs, "sdk_inputs_sha256": sdk_inputs,
                                    "elf_sha256": sha(elf),
                                    "mode": {"transport": "transport-only", "credentials": "same-euid",
-                                            "vfs": "existing-root", "cross-root": "cross-root"}[args.probe],
+                                            "vfs": "existing-root", "cross-root": "cross-root",
+                                            "sysent": "sysent-read-only"}[args.probe],
                                    "receiver": ("exclusive" if args.exclusive_receiver else "atomic")
                                                if args.probe == "transport" else None,
                                    "console_validated": False}, indent=2, sort_keys=True) + "\n")
