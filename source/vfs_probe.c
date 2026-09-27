@@ -3,6 +3,7 @@
 #define PS5LOG_IMPLEMENTATION
 #include "ps5log.h"
 #include "probe_identity.h"
+#include "native_vfs_syscall.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <ps5/kernel.h>
@@ -29,11 +30,11 @@ int main(void)
     if (fstat(root, &original) < 0) { error = errno; goto done; }
     stage = "native_fchdir";
     ps5log_printf(PS5LOG_MARK, "probe_operation stage=%s", stage);
-    if (fchdir(root) < 0) { error = errno; goto done; }
+    if ((error = lapy_vfs_fchdir(root))) goto done;
     cwd_changed = 1;
     stage = "native_chroot";
     ps5log_printf(PS5LOG_MARK, "probe_operation stage=%s", stage);
-    if (chroot(".") < 0) { error = errno; goto done; }
+    if ((error = lapy_vfs_chroot("."))) goto done;
     stage = "root_identity";
     if (stat("/", &current) < 0) { error = errno; goto done; }
     if (original.st_dev != current.st_dev || original.st_ino != current.st_ino) {
@@ -44,9 +45,9 @@ int main(void)
 done:
     if (cwd >= 0) {
         if (cwd_changed) {
-            if (fchdir(cwd) < 0) restore_error = errno;
-            else if (stat(".", &restored) < 0) restore_error = errno;
-            else if (old_cwd.st_dev != restored.st_dev || old_cwd.st_ino != restored.st_ino)
+            restore_error = lapy_vfs_fchdir(cwd);
+            if (!restore_error && stat(".", &restored) < 0) restore_error = errno;
+            else if (!restore_error && (old_cwd.st_dev != restored.st_dev || old_cwd.st_ino != restored.st_ino))
                 restore_error = EPROTO;
         }
         close(cwd);

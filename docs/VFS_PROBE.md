@@ -18,12 +18,41 @@ root adoption, preservation of a game's jail directory, filedesc isolation,
 vnode refcounts or lifecycle safety. Unsupported syscalls must stop this route;
 never substitute direct root/jail pointer writes.
 
-## Observed on 12.02
+## Corrected observation on 12.02
 
 Build `fc4cefb05785d1657dffe9ec0103cbfcde1a2af92c0367383f81dc0edf7fe0e7`,
 ELF SHA256 `f9341d69b351be6681ce8fe3ac3678a462d89319403bdaf5160816f75b5f7c37`,
-passed the existing-root operation and cwd restoration. The ps5log session
-ended cleanly with BYE and no gaps; private log SHA256:
+reported success, but that conclusion was invalid: the SDK's libc wrappers
+return the raw syscall result without interpreting the FreeBSD carry flag.
+Checking only for a negative return value accepts positive kernel errors as
+success. Unchanged root identity cannot detect this when selecting the same
+root. The session ended cleanly; its private log SHA256 was:
 `7927c4db671c5195cdce77eebcea762721744da461f843be01a8d4331f576895`.
-The next necessary gate is adoption of a different root, preserving an existing
-jail directory, followed by access under /data. This observation proves neither.
+This artifact is **not evidence of successful chroot or fchdir**.
+
+The current probes use `native_vfs_syscall.h`, which captures the carry flag
+and returns a positive errno. It never relies on stale libc errno for those
+two calls. The SDK's source `libc/syscalls.c` confirms the wrapper behavior.
+
+## Different-root gate
+
+`--probe cross-root` builds under `build/cross_root-probe/`. It selects /data as
+the payload's temporary root, verifies directory identity and requires jaildir
+to equal that sandbox root, then adopts the saved original root using native
+fchdir/chroot. It requires preservation of the sandbox jaildir and checks
+/data identity afterward. It restores effective root and cwd on failures after
+a successful root change. It never overwrites jaildir; no files are created.
+This is a controlled chroot sandbox, not a Sony title sandbox.
+
+The corrected checked-call build
+`36525bf6b71157a6137cc11d2cf1988cc9cf5e0f2177c563bdfcab3ed54c9c88`,
+ELF `8841b063dbf2364d63740252fe010e9365e8609e9a1ba3b2628e10f32e5b84e9`,
+returned **EPERM (1)** at chroot(/data), before any root change. The log ended
+with clean BYE and no gaps, SHA256:
+`dd0602b84a34298394ab43e59ab6858f87adbfb9a0cbbdfc12f0d1c8616c9aaa`.
+
+The route is not yet usable with the probe's current credentials. Next verify
+the caller's native identity and Sony privilege prerequisites. SDK startup
+changes selected capability bytes; full chroot privileges cannot be inferred
+from successful loading, /data visibility or seteuid(current). Do not substitute
+raw vnode writes or claim the lifetime problem is fixed.
