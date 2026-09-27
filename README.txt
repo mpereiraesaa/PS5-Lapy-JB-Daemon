@@ -1,3 +1,22 @@
+FORK STATUS (mpereiraesaa)
+-------------------------
+Native reference-safe repeated elevation is NOT implemented or validated yet.
+The inherited lapy_jb_daemon.elf is an upstream artifact, not a fixed release.
+Do not use this fork as a remedy for repeated-launch crashes yet.
+
+The original build required a libhijacker.a that was not present in Git.
+This branch adds an explicit, source-pinned LEGACY comparison build:
+
+  PS5_PAYLOAD_SDK=/path/to/sdk/install PS5_CXXRT=/path/to/cxxrt make legacy
+  make check
+
+PS5_CXXRT is optional when the SDK already contains libc++, libc++abi and
+libunwind. Output: build/legacy/lapy_jb_daemon_legacy.elf and manifest.json.
+No deployment occurs. The legacy build retains unsafe kernel writes.
+See docs/ELEVATION.md for evidence, limitations and the native backend contract.
+
+Original upstream documentation follows; its runtime claims describe upstream.
+
 ================================================================================
   Lapy JB Daemon — standalone homebrew payload for PS5-Xplorer / similar apps
   v1.2 — multi-firmware (3.00 -> 12.00, every fw covered by ps5-payload-sdk)
