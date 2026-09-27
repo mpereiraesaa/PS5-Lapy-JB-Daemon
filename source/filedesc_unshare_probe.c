@@ -6,6 +6,7 @@
 #include "probe_identity.h"
 #include <errno.h>
 #include <ps5/kernel.h>
+#include <signal.h>
 #include <stdint.h>
 #include <string.h>
 #include <sys/types.h>
@@ -62,6 +63,7 @@ int main(void)
     uint8_t initial_bytes[SNAPSHOT_BYTES], shared_bytes[SNAPSHOT_BYTES];
     uint8_t private_bytes[SNAPSHOT_BYTES], old_bytes[SNAPSHOT_BYTES];
     int release_pipe[2] = {-1, -1};
+    void (*previous_sigpipe)(int) = SIG_ERR;
     const char *stage = "baseline";
     pid_t child = -1;
     int unshared = 0;
@@ -75,6 +77,11 @@ int main(void)
     error = snapshot(&before, initial_bytes);
     if (error) goto done;
     if (pipe(release_pipe)) { error = errno ? errno : EIO; goto done; }
+    previous_sigpipe = signal(SIGPIPE, SIG_IGN);
+    if (previous_sigpipe == SIG_ERR) {
+        error = errno ? errno : EIO;
+        goto done;
+    }
 
     stage = "create_shared_child";
     child = rfork(RFPROC);
@@ -122,6 +129,7 @@ done:
     }
     if (release_pipe[0] >= 0) close(release_pipe[0]);
     if (release_pipe[1] >= 0) close(release_pipe[1]);
+    if (previous_sigpipe != SIG_ERR) signal(SIGPIPE, previous_sigpipe);
     /* Only equivalence and bounded reference counts leave the console. */
     ps5log_printf(error ? PS5LOG_ERR : PS5LOG_MARK,
                   "probe_result build=%s stage=%s error=%d candidate_count=%u ref_offset=0x%x ref_width=%u initial_refs=%d shared_refs=%d private_refs=%d old_refs=%d shared_same=%d private_new=%d unshared=%d",
