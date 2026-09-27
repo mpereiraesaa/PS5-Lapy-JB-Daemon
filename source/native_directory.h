@@ -18,4 +18,19 @@ int lapy_send_directory(int socket_fd, int directory_fd, uint64_t request_id);
  */
 int lapy_receive_directory(int socket_fd, uint64_t request_id, int *directory_fd);
 
+/* Same ownership contract; stage receives a static diagnostic label, never
+ * addresses or descriptor values. It may be NULL. */
+int lapy_receive_directory_diagnostic(int socket_fd, uint64_t request_id,
+                                      int *directory_fd, const char **stage);
+
+/* Explicit alternative for platforms without atomic CLOEXEC reception.
+ * PRECONDITION: caller excludes fork/exec and descriptor-table mutation by
+ * every other thread/sharer until this call finishes. For remote use this
+ * requires verified target quiescence; a request ID or PID is insufficient.
+ * Uses recvmsg without MSG_CMSG_CLOEXEC, then F_SETFD and verifies F_GETFD.
+ * Same cleanup and output ownership contract. Never an automatic fallback.
+ */
+int lapy_receive_directory_exclusive(int socket_fd, uint64_t request_id,
+                                     int *directory_fd, const char **stage);
+
 #endif

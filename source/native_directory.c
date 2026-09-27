@@ -11,6 +11,9 @@
 
 enum { PACKET_BYTES = 16, MAX_RIGHTS = 8 };
 
+static int receive_directory(int socket_fd, uint64_t request_id,
+                             int *directory_fd, const char **stage, int exclusive);
+
 static void packet(unsigned char bytes[PACKET_BYTES], uint64_t id)
 {
     const unsigned char magic[8] = {'L', 'A', 'P', 'Y', 'D', 'I', 'R', 1};
@@ -74,6 +77,24 @@ int lapy_send_directory(int socket_fd, int directory_fd, uint64_t request_id)
 
 int lapy_receive_directory(int socket_fd, uint64_t request_id, int *directory_fd)
 {
+    return lapy_receive_directory_diagnostic(socket_fd, request_id, directory_fd, NULL);
+}
+
+int lapy_receive_directory_diagnostic(int socket_fd, uint64_t request_id,
+                                      int *directory_fd, const char **stage)
+{
+    return receive_directory(socket_fd, request_id, directory_fd, stage, 0);
+}
+
+int lapy_receive_directory_exclusive(int socket_fd, uint64_t request_id,
+                                     int *directory_fd, const char **stage)
+{
+    return receive_directory(socket_fd, request_id, directory_fd, stage, 1);
+}
+
+static int receive_directory(int socket_fd, uint64_t request_id,
+                             int *directory_fd, const char **stage, int exclusive)
+{
     unsigned char bytes[PACKET_BYTES], expected[PACKET_BYTES];
     union { struct cmsghdr alignment; unsigned char bytes[CMSG_SPACE(MAX_RIGHTS * sizeof(int))]; } control;
     struct msghdr message;
@@ -84,9 +105,11 @@ int lapy_receive_directory(int socket_fd, uint64_t request_id, int *directory_fd
     unsigned count = 0;
     int error;
     ssize_t size;
+    if (stage) *stage = "receive_arguments";
     if (!directory_fd)
         return EINVAL;
     *directory_fd = -1;
+    if (stage) *stage = "receive_socket";
     if ((error = check_socket(socket_fd)))
         return error;
     memset(&message, 0, sizeof(message));
@@ -97,10 +120,13 @@ int lapy_receive_directory(int socket_fd, uint64_t request_id, int *directory_fd
     message.msg_iovlen = 1;
     message.msg_control = control.bytes;
     message.msg_controllen = sizeof(control.bytes);
-    size = recvmsg(socket_fd, &message, MSG_DONTWAIT | MSG_CMSG_CLOEXEC);
+    if (stage) *stage = "recvmsg";
+    size = recvmsg(socket_fd, &message,
+                  MSG_DONTWAIT | (exclusive ? 0 : MSG_CMSG_CLOEXEC));
     if (size < 0)
         return errno;
     error = 0;
+    if (stage) *stage = "receive_packet";
     for (header = CMSG_FIRSTHDR(&message); header; header = CMSG_NXTHDR(&message, header)) {
         if (header->cmsg_level != SOL_SOCKET || header->cmsg_type != SCM_RIGHTS) {
             error = EPROTO;
@@ -130,15 +156,27 @@ int lapy_receive_directory(int socket_fd, uint64_t request_id, int *directory_fd
     else if (size != PACKET_BYTES || memcmp(bytes, expected, sizeof(bytes)) || count != 1)
         error = EPROTO;
     if (!error) {
+        if (exclusive) {
+            if (stage) *stage = "receive_setfd";
+            if (fcntl(received[0], F_SETFD, FD_CLOEXEC) < 0)
+                error = errno;
+        }
+    }
+    if (!error) {
+        if (stage) *stage = "receive_getfd";
         int flags = fcntl(received[0], F_GETFD);
         if (flags < 0)
             error = errno;
-        else if (!(flags & FD_CLOEXEC))
+        else if (!(flags & FD_CLOEXEC)) {
+            if (stage) *stage = "receive_cloexec_missing";
             error = ENOTSUP;
-        else if (fstat(received[0], &st) < 0)
-            error = errno;
-        else if (!S_ISDIR(st.st_mode))
-            error = ENOTDIR;
+        } else {
+            if (stage) *stage = "receive_directory_stat";
+            if (fstat(received[0], &st) < 0)
+                error = errno;
+            else if (!S_ISDIR(st.st_mode))
+                error = ENOTDIR;
+        }
     }
     if (error) {
         for (unsigned i = 0; i < count; ++i)
@@ -146,5 +184,6 @@ int lapy_receive_directory(int socket_fd, uint64_t request_id, int *directory_fd
         return error;
     }
     *directory_fd = received[0];
+    if (stage) *stage = "receive_complete";
     return 0;
 }

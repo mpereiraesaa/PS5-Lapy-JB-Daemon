@@ -12,6 +12,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#ifndef LAPY_PROBE_EXCLUSIVE
+#define LAPY_PROBE_EXCLUSIVE 0
+#endif
+
 int main(void)
 {
     int pair[2] = {-1, -1}, root = -1, received = -1;
@@ -20,8 +24,9 @@ int main(void)
     struct stat original, imported;
     if (ps5log_init_default("LAPYPROBE", "lapy-native-probe") != 0)
         return 2;
-    ps5log_printf(PS5LOG_MARK, "probe_start build=%s firmware=%08x cycles=64 mode=transport-only",
-                  LAPY_PROBE_ID, kernel_get_fw_version());
+    ps5log_printf(PS5LOG_MARK, "probe_start build=%s firmware=%08x cycles=64 mode=transport-only receiver=%s",
+                  LAPY_PROBE_ID, kernel_get_fw_version(),
+                  LAPY_PROBE_EXCLUSIVE ? "exclusive" : "atomic");
     stage = "socketpair";
     if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, pair) < 0) {
         error = errno;
@@ -50,7 +55,15 @@ int main(void)
             goto cleanup;
         }
         stage = "receive_directory";
-        error = lapy_receive_directory(pair[1], (uint64_t)complete + 1, &received);
+        /* This probe never executes another image or creates a thread/child;
+         * ps5log is synchronous. This does NOT establish exclusion in a target
+         * title. An integrated daemon must prove that independently. */
+        if (LAPY_PROBE_EXCLUSIVE)
+            error = lapy_receive_directory_exclusive(pair[1], (uint64_t)complete + 1,
+                                                      &received, &stage);
+        else
+            error = lapy_receive_directory_diagnostic(pair[1], (uint64_t)complete + 1,
+                                                      &received, &stage);
         if (error) goto cleanup;
         stage = "identity";
         if (fstat(received, &imported) < 0) {

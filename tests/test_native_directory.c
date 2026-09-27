@@ -66,6 +66,20 @@ int main(void)
         assert(close(received) == 0);
     }
     assert(open_count() == steady);
+    /* This test process has one thread and no signal handler capable of exec.
+     * The explicit exclusive path must set CLOEXEC itself (recvmsg flags=0). */
+    for (int i = 0; i < 1000; ++i) {
+        const char *stage = NULL;
+        assert(lapy_send_directory(pair[0], root, 42) == 0);
+        assert(lapy_receive_directory_exclusive(pair[1], 42, &received, &stage) == 0);
+        assert(strcmp(stage, "receive_complete") == 0);
+        assert(fcntl(received, F_GETFD) & FD_CLOEXEC);
+        assert(close(received) == 0);
+    }
+    assert(open_count() == steady);
+    bad_packet(pair[0], root, 2, 16);
+    assert(lapy_receive_directory_exclusive(pair[1], 42, &received, NULL) == EPROTO);
+    assert(received == -1 && open_count() == steady);
     assert(lapy_send_directory(pair[0], root, 43) == 0);
     assert(lapy_receive_directory(pair[1], 42, &received) == EPROTO && received == -1);
     assert(open_count() == steady);

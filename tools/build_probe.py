@@ -17,6 +17,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sdk", default=os.environ.get("PS5_PAYLOAD_SDK"), required=not os.environ.get("PS5_PAYLOAD_SDK"))
     parser.add_argument("--logging-client", type=Path, required=True)
+    parser.add_argument("--exclusive-receiver", action="store_true",
+                        help="test explicit CLOEXEC setup in this non-execing probe only")
     args = parser.parse_args()
     sdk = Path(args.sdk).resolve()
     logging = args.logging_client.resolve()
@@ -28,6 +30,8 @@ def main():
     sdk_inputs = {str(p.relative_to(sdk)): sha(p)
                   for p in sorted((sdk / "target").rglob("*")) if p.is_file()}
     flags = ["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror"]
+    if args.exclusive_receiver:
+        flags.append("-DLAPY_PROBE_EXCLUSIVE=1")
     identity = hashlib.sha256(json.dumps({"inputs": inputs, "sdk": sdk_inputs,
                                          "flags": flags}, sort_keys=True).encode()).hexdigest()
     output = ROOT / "build/probe"
@@ -50,6 +54,7 @@ def main():
     manifest.write_text(json.dumps({"schema": "lapy-probe-build/1", "build_id": identity,
                                    "inputs_sha256": inputs, "sdk_inputs_sha256": sdk_inputs,
                                    "elf_sha256": sha(elf), "mode": "transport-only",
+                                   "receiver": "exclusive" if args.exclusive_receiver else "atomic",
                                    "console_validated": False}, indent=2, sort_keys=True) + "\n")
     print(f"Built {elf.relative_to(ROOT)}\nbuild_id={identity}\nsha256={sha(elf)}")
 
