@@ -20,11 +20,11 @@ def main():
     parser.add_argument("--logging-client", type=Path, required=True)
     parser.add_argument("--exclusive-receiver", action="store_true",
                         help="test explicit CLOEXEC setup in this non-execing probe only")
-    parser.add_argument("--probe", choices=("transport", "cross-process-directory", "credentials", "vfs", "cross-root", "sysent", "root-refs", "root-native-refs", "kernel-symbols", "filedesc-unshare", "target-dirs", "request-dirs", "donor-filedesc", "null-jail-transfer", "old-root-release", "ptrace-quiescence", "signal-quiescence", "thread-stop-calibration", "live-target-stop", "debug-retention", "move-only", "retained-cross-process", "retained-two-root", "retained-nonroot", "remote-credential-clone", "self-ptrace-clone", "preentry-log"), default="transport")
+    parser.add_argument("--probe", choices=("transport", "cross-process-directory", "credentials", "vfs", "cross-root", "sysent", "root-refs", "root-native-refs", "kernel-symbols", "filedesc-unshare", "target-dirs", "request-dirs", "donor-filedesc", "null-jail-transfer", "old-root-release", "ptrace-quiescence", "signal-quiescence", "thread-stop-calibration", "live-target-stop", "live-target-ptrace", "debug-retention", "move-only", "retained-cross-process", "retained-two-root", "retained-nonroot", "remote-credential-clone", "self-ptrace-clone", "preentry-log"), default="transport")
     parser.add_argument("--target-pid", type=int,
                         help="live process PID to observe; required only for target-dirs")
     parser.add_argument("--target-title",
-                        help="PPSA title to observe; valid only for live-target-stop")
+                        help="PPSA title to observe; valid for live-target-stop/ptrace")
     parser.add_argument("--observe-state", action="store_true",
                         help="read stopped title root/jail/cwd and credential state; live-target-stop only")
     parser.add_argument("--self-stop", action="store_true",
@@ -50,8 +50,8 @@ def main():
     elif args.target_pid is not None:
         parser.error("--target-pid requires --probe target-dirs")
     if args.target_title is not None:
-        if args.probe != "live-target-stop" or not re.fullmatch(r"PPSA[0-9]{5}", args.target_title):
-            parser.error("--target-title requires --probe live-target-stop and a PPSA title ID")
+        if args.probe not in ("live-target-stop", "live-target-ptrace") or not re.fullmatch(r"PPSA[0-9]{5}", args.target_title):
+            parser.error("--target-title requires a live-target probe and a PPSA title ID")
     if args.observe_state and args.probe != "live-target-stop":
         parser.error("--observe-state requires --probe live-target-stop")
     if args.self_stop and args.probe != "retained-nonroot":
@@ -78,6 +78,7 @@ def main():
              "signal-quiescence": ("signal_quiescence_probe.c",),
              "thread-stop-calibration": ("thread_stop_calibration_probe.c",),
              "live-target-stop": ("live_target_stop_probe.c",),
+             "live-target-ptrace": ("live_target_ptrace_probe.c",),
              "debug-retention": ("debug_retention_probe.c",),
              "move-only": ("donor_move_only_probe.c", "donor_transaction.c",
                            "donor_transaction.h"),
@@ -139,6 +140,7 @@ def main():
             "signal-quiescence": "signal_quiescence",
             "thread-stop-calibration": "thread_stop_calibration",
             "live-target-stop": "live_target_stop",
+            "live-target-ptrace": "live_target_ptrace",
             "debug-retention": "debug_retention",
             "move-only": "move_only",
             "retained-cross-process": "retained_cross_process",
@@ -151,6 +153,7 @@ def main():
                      f"build/{stem}-probe/pid-{args.target_pid}" if args.probe == "target-dirs" else
                      f"build/{stem}-probe/{args.target_title}/state" if args.probe == "live-target-stop" and args.target_title and args.observe_state else
                      f"build/{stem}-probe/{args.target_title}" if args.probe == "live-target-stop" and args.target_title else
+                     f"build/{stem}-probe/{args.target_title}" if args.probe == "live-target-ptrace" and args.target_title else
                      f"build/{stem}-probe/self-stop" if args.probe == "retained-nonroot" and args.self_stop else
                      f"build/{stem}-probe")
     output.mkdir(parents=True, exist_ok=True)
@@ -205,6 +208,7 @@ def main():
                                             "signal-quiescence": "disposable-multithread-signal-quiescence",
                                             "thread-stop-calibration": "disposable-thread-and-stop-field-calibration",
                                             "live-target-stop": "live-title-signal-stop-read-only",
+                                            "live-target-ptrace": "live-title-ptrace-retention-read-only",
                                             "debug-retention": "disposable-debug-retention-child",
                                             "move-only": "move-only-donor-reference-round-trip",
                                             "retained-cross-process": "disposable-retained-cross-process-ref-transfer",
@@ -216,7 +220,7 @@ def main():
                                    "receiver": ("exclusive" if args.exclusive_receiver else "atomic")
                                                if args.probe == "transport" else None,
                                    "target_pid": args.target_pid if args.probe == "target-dirs" else None,
-                                   "target_title": args.target_title if args.probe == "live-target-stop" else None,
+                                   "target_title": args.target_title if args.probe in ("live-target-stop", "live-target-ptrace") else None,
                                    "observe_state": args.observe_state if args.probe == "live-target-stop" else None,
                                    "self_stop": args.self_stop if args.probe == "retained-nonroot" else None,
                                    "console_validated": False}, indent=2, sort_keys=True) + "\n")
