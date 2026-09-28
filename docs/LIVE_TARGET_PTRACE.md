@@ -48,3 +48,44 @@ BYE. Target PID 1158 retained its proc/filedesc identity, had private
 succeeded. The title then closed normally; no payload remained. This is the
 real-title retained-stop gate for the next credential/root transaction probe,
 not yet an elevated title.
+
+## Read-only syscall location check
+
+Build `--probe live-target-ptrace --target-title PPSA99994 --scan-gadget` with
+the same SDK and logging client to get the isolated artifact under
+`build/live_target_ptrace-probe/PPSA99994/scan/`. It adds `PT_GETREGS` and
+read-only `PT_READ_I` checks over the nearby code pages of the stopped title.
+It first searches near the stopped RIP. If that fails, it scans the first
+code page at the `libkernel.sprx` base observed by the host map inspection.
+It reports only whether a two-byte `syscall` instruction was found, its
+distance from the RIP or libkernel base, and which region supplied it. It does
+not log target addresses, set registers, execute that instruction or mutate
+target memory. It detaches, restores tracer authority and acknowledges the
+request as before.
+
+Prepared FW 12.02 build ID:
+`0445b318338ef6b45479fdf0b54f81542bf22c465b472f329ba29b66ad555ae7`;
+ELF SHA-256:
+`4e7b102acc3a033a6bd8245fa696adc207f59d3adeb3fa84212172f7a2232c94`.
+This build was run once on the console. Its clean `LAPYTP` stream is
+`20260928T100058472Z_LAPYTP_lapy-live-title-ptrace-retention_0x24042bec9404`.
+For the title's mapped `libkernel` offset `0xf8`, payload-side `PT_READ_I` and
+`PT_READ_D` each returned `0x0000000c` with `errno=0`; neither returned the
+actual `89 ca 0f 05` bytes observed through ps5debug's read-only process-map
+API. The scanner therefore found no gadget even though 5,120 reads returned
+without errno. It detached, restored authority, acknowledged the request and
+closed the title cleanly. No target register or memory write was attempted.
+This rules out using this `ptrace` read route as a safe gadget verifier on this
+title without further investigation.
+
+An earlier RIP-near-only run completed and detached cleanly but found no
+`syscall` in nine nearby pages. A separate read-only host inspection of the
+same title showed executable `libkernel.sprx` at `0x800000000` with a `syscall`
+byte pair at offset `0xfa`. The first fallback build incorrectly required the
+loaded code segment to begin with an ELF header and therefore reported a false
+negative; it detached and closed cleanly. The revised scan made 5,120
+successful `PT_READ_I` calls but still missed the opcode. A second host map
+read confirmed that the base did not move and the bytes at offset `0xf8` are
+`89 ca 0f 05 72 0d 89 07`. The current diagnostic logs the low word and
+errno from both `PT_READ_I` and `PT_READ_D` at that address to distinguish
+different ptrace read semantics from an address or scan error.

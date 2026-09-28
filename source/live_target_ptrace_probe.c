@@ -5,6 +5,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <limits.h>
+#include <machine/reg.h>
 #include <ps5/kernel.h>
 #include <signal.h>
 #include <stdint.h>
@@ -33,6 +34,9 @@
 #define THREAD_NEXT 0x10u
 #define FD_REFCNT 0x34u
 #define PTRACE_AUTHID UINT64_C(0x4800000000010003)
+#ifndef LAPY_SCAN_GADGET
+#define LAPY_SCAN_GADGET 0
+#endif
 #ifndef LAPY_OBSERVE_STATE
 #define LAPY_OBSERVE_STATE 0
 #endif
@@ -167,6 +171,47 @@ static int same_members(const struct target_snapshot *a,
     return equal;
 }
 
+#if LAPY_SCAN_GADGET
+static int scan_syscall(pid_t pid, uintptr_t rip, uintptr_t *gadget,
+                        uintptr_t *distance, int *from_libkernel,
+                        unsigned *read_words)
+{
+    const uintptr_t page = rip & ~(uintptr_t)0xfffu;
+    const uintptr_t libkernel_base = UINT64_C(0x800000000);
+    uintptr_t starts[2] = {page >= 0x4000u ? page - 0x4000u : 0,
+                           libkernel_base};
+    uintptr_t ends[2] = {page + 0x5000u, libkernel_base + 0x1000u};
+    if (ends[0] < page) return EOVERFLOW;
+    for (unsigned region = 0; region < 2; ++region) {
+        for (uintptr_t address = starts[region]; address < ends[region];
+             address += sizeof(long)) {
+            errno = 0;
+            long word = ptrace(PT_READ_I, pid, (caddr_t)address, 0);
+            if (word == -1 && errno) continue;
+            ++*read_words;
+            uint64_t bytes = (uint64_t)(unsigned long)word;
+            for (unsigned offset = 0; offset < sizeof(long); ++offset) {
+                if (((bytes >> (offset * 8)) & 0xffu) != 0x0fu) continue;
+                uintptr_t candidate = address + offset;
+                errno = 0;
+                long instruction = ptrace(PT_READ_I, pid,
+                                          (caddr_t)candidate, 0);
+                if (instruction == -1 && errno) continue;
+                if (((unsigned long)instruction & 0xffffu) != 0x050fu)
+                    continue;
+                *gadget = candidate;
+                *from_libkernel = region == 1;
+                *distance = region == 1 ? candidate - libkernel_base :
+                            (candidate > rip ? candidate - rip :
+                             rip - candidate);
+                return 0;
+            }
+        }
+    }
+    return ENOENT;
+}
+#endif
+
 int main(void)
 {
     char path[512] = {0};
@@ -179,14 +224,20 @@ int main(void)
     int auth_changed = 0, auth_restored = 0, private_self_cred = 0;
     intptr_t self_cred_before = 0, self_cred_after = 0;
     uint64_t original_authid = 0;
+#if LAPY_SCAN_GADGET
+    struct reg registers = {0};
+    uintptr_t gadget = 0, distance = 0;
+    int from_libkernel = 0;
+    unsigned read_words = 0;
+#endif
     const char *stage = "preflight";
 
     if (ps5log_init_default("LAPYTP", "lapy-live-title-ptrace-retention"))
         return 2;
     ps5log_printf(PS5LOG_MARK,
-                  "probe_start build=%s firmware=%08x mode=live-title-ptrace-retention title=%s max_polls=%u",
+                  "probe_start build=%s firmware=%08x mode=live-title-ptrace-retention title=%s scan_gadget=%d max_polls=%u",
                   LAPY_PROBE_ID, kernel_get_fw_version(), LAPY_TARGET_TITLE,
-                  MAX_POLLS);
+                  LAPY_SCAN_GADGET, MAX_POLLS);
     if (kernel_get_fw_version() != 0x12020000 ||
         KERNEL_OFFSET_PROC_P_PID != PROC_PID_OFFSET) {
         error = ENOTSUP; goto done;
@@ -253,6 +304,32 @@ int main(void)
     ps5log_printf(PS5LOG_MARK,
                   "target_stopped build=%s private_self_cred=1 retained_identity=1 threads=%u suspended=%u private_fd=1",
                   LAPY_PROBE_ID, threads, suspended);
+#if LAPY_SCAN_GADGET
+    stage = "scan_gadget";
+    if (ptrace(PT_GETREGS, pid, (caddr_t)&registers, 0)) {
+        error = errno ? errno : EIO; goto done;
+    }
+    errno = 0;
+    long text_f8 = ptrace(PT_READ_I, pid,
+                          (caddr_t)UINT64_C(0x8000000f8), 0);
+    int text_errno = errno;
+    errno = 0;
+    long data_f8 = ptrace(PT_READ_D, pid,
+                          (caddr_t)UINT64_C(0x8000000f8), 0);
+    int data_errno = errno;
+    ps5log_printf(PS5LOG_MARK,
+                  "read_diag build=%s text_low=%08lx text_errno=%d data_low=%08lx data_errno=%d",
+                  LAPY_PROBE_ID, (unsigned long)text_f8 & 0xffffffffu,
+                  text_errno, (unsigned long)data_f8 & 0xffffffffu,
+                  data_errno);
+    error = scan_syscall(pid, (uintptr_t)registers.r_rip,
+                         &gadget, &distance, &from_libkernel, &read_words);
+    ps5log_printf(error ? PS5LOG_ERR : PS5LOG_MARK,
+                  "gadget_scan build=%s found=%d distance=%lu verified=%d libkernel=%d read_words=%u",
+                  LAPY_PROBE_ID, !error, (unsigned long)distance,
+                  !error && gadget != 0, from_libkernel, read_words);
+    if (error) goto done;
+#endif
     stage = "complete";
 done:
     if (attached) {
