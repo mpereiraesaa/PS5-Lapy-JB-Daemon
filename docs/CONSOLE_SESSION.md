@@ -21,6 +21,7 @@ one, compare its SHA256 to the listed value; a rebuild changes its identity.
 | 6 | `build/cross_process_directory-probe/lapy_cross_process_directory_probe.elf` | `cabf8b8a700bd70e049b914fd6b81b19f49c4c3a31c099a800a5798358e3328c` | Native root FD transfer between disposable processes and use after sender close. |
 | 7 | `build/request_dirs-probe/lapy_request_dirs_probe.elf` | See current build manifest | One-shot observation of a new `PPSA99995` request before elevation; it acknowledges without elevation. |
 | 8 | `build/donor_filedesc-probe/lapy_donor_filedesc_probe.elf` | See current build manifest | Native donor filedesc copy and release, measured through root-vnode fields; no pointer writes. |
+| 9 | `build/null_jail_transfer-probe/lapy_null_jail_transfer_probe.elf` | See current build manifest | Controlled donor reference transfer into and out of a disposable payload's null jail slot; writes two filedesc slots. |
 
 The corresponding build IDs are, respectively,
 `a0b230010a01b8bb21b2c4e2e33ce849d3d5875247fc569713503d5cdde2d89c`,
@@ -64,6 +65,12 @@ Follow `DONOR_FILEDESC_PROBE.md`: the private filedesc child acquired two
 system-root references natively and released both at exit, with a complete
 identity-bound ps5log/1 record. This is a prerequisite for a reference-donor
 design, not proof that a target can be changed safely.
+
+Step 9 completed on owned 12.02. Follow `DONOR_NULL_JAIL_TRANSFER.md`: it
+wrote only verified directory slots in private disposable processes. Native
+root fields returned exactly to baseline after both donors exited. It did
+not elevate or target a game or launcher, and does not establish active-target
+quiescence or rollback.
 
 Step 7 was built and run once on 12.02. The title launcher did not pass the
 lab supervisor's service preflight because `shsrv` was unavailable; the
