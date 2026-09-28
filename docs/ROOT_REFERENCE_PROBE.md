@@ -61,3 +61,39 @@ and no sequence gaps. This closes the `kldsym` lookup path on
 build used a static pointer table whose entries appeared null at runtime, so
 its nine `ENOSYS` results alone were ambiguous; the corrected build passes
 each name literal directly and logs it alongside the result.
+
+## Native reference calibration without elevation
+
+`--probe root-native-refs` builds a separate disposable ELF. It reads its own
+root/jail directory pointers and the SDK's system root vnode, then refuses to
+calibrate if `/` might resolve to another vnode. It opens `/` four times with
+ordinary `open(O_DIRECTORY)`, keeping each descriptor alive, and closes them
+one by one. After each native operation it waits 20 ms and reads only the
+32-bit fields at `0x1bc` and `0x1c0`. It never writes kernel memory or changes
+another process. Build it with:
+
+```sh
+PS5_PAYLOAD_SDK=<installed-sdk> python3 tools/build_probe.py \
+  --logging-client ../logging_server/client --probe root-native-refs
+```
+
+Verify the stream, server manifest, build manifest and ELF together:
+
+```sh
+python3 tools/analyze_root_native_refs.py STREAM.log SERVER.json \
+  build/root_native_refs-probe/manifest.json \
+  build/root_native_refs-probe/lapy_root_native_refs_probe.elf
+```
+
+On owned firmware 12.02, build
+`beab8b6b87bacab5cdbc82f6299054b69d60057093dbcd28bf90d818729882ef`
+(ELF SHA256 `5234a1754f84d4af0e27c227e1c26cf0659690586cc0dbcad07a80d69dbbc81e`)
+completed with a clean `ps5log/1` BYE and no gaps. Its `fd_rdir` was the
+system root vnode and `fd_jdir` was null. The values moved from 60/59 to
+64/63 through four native opens and returned one step per close to 60/59.
+The identity-bound analyzer accepted the exact nine-sample transition. A
+separate 120-second read-only baseline had zero field changes. These results
+identify two reference-responsive fields in this vnode on 12.02. They do not
+show that Lapy's overwritten target fields owned references, prove the
+release path for an arbitrary old sandbox root, or validate direct writes to
+either field. Other firmware needs its own observation.

@@ -19,7 +19,7 @@ def main():
     parser.add_argument("--logging-client", type=Path, required=True)
     parser.add_argument("--exclusive-receiver", action="store_true",
                         help="test explicit CLOEXEC setup in this non-execing probe only")
-    parser.add_argument("--probe", choices=("transport", "credentials", "vfs", "cross-root", "sysent", "root-refs", "kernel-symbols", "filedesc-unshare", "target-dirs"), default="transport")
+    parser.add_argument("--probe", choices=("transport", "credentials", "vfs", "cross-root", "sysent", "root-refs", "root-native-refs", "kernel-symbols", "filedesc-unshare", "target-dirs"), default="transport")
     parser.add_argument("--target-pid", type=int,
                         help="live process PID to observe; required only for target-dirs")
     parser.add_argument("--sony-privileges", action="store_true",
@@ -50,6 +50,7 @@ def main():
              "cross-root": ("cross_root_probe.c", "native_vfs_syscall.h", "vfs_prerequisites.h",
              "sony_scope.c", "sony_scope.h"), "sysent": ("sysent_probe.c",),
              "root-refs": ("root_reference_probe.c",),
+             "root-native-refs": ("root_native_reference_probe.c",),
              "kernel-symbols": ("kernel_symbol_probe.c",),
              "filedesc-unshare": ("filedesc_unshare_probe.c",),
              "target-dirs": ("target_directory_probe.c",)}[args.probe]
@@ -75,6 +76,7 @@ def main():
     stem = {"transport": "native", "credentials": "credential", "vfs": "vfs",
             "cross-root": "cross_root", "sysent": "sysent",
             "root-refs": "root_refs", "kernel-symbols": "kernel_symbols",
+            "root-native-refs": "root_native_refs",
             "filedesc-unshare": "filedesc_unshare",
             "target-dirs": "target_dirs"}[args.probe]
     output = ROOT / ("build/probe" if args.probe == "transport" else
@@ -103,6 +105,7 @@ def main():
                                             "vfs": "existing-root", "cross-root": "cross-root",
                                             "sysent": "sysent-read-only",
                                             "root-refs": "root-vnode-read-only",
+                                            "root-native-refs": "root-vnode-native-open-close",
                                             "kernel-symbols": "kernel-symbol-lookup-only",
                                             "filedesc-unshare": "self-filedesc-native-unshare",
                                             "target-dirs": "target-directory-read-only"}[args.probe],
