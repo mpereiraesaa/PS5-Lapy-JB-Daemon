@@ -19,6 +19,7 @@ one, compare its SHA256 to the listed value; a rebuild changes its identity.
 | 4 | `build/root_refs-probe/lapy_root_refs_probe.elf` | `e6cb3ea4002bda4e1359ad3847d305b6776be5d20ddc690a732374c58a937c68` | Small root-vnode field changes across a bounded observation window. |
 | 5 | `build/root_native_refs-probe/lapy_root_native_refs_probe.elf` | `5234a1754f84d4af0e27c227e1c26cf0659690586cc0dbcad07a80d69dbbc81e` | Native `open`/`close` calibration of root-vnode reference fields in a disposable payload. |
 | 6 | `build/cross_process_directory-probe/lapy_cross_process_directory_probe.elf` | `cabf8b8a700bd70e049b914fd6b81b19f49c4c3a31c099a800a5798358e3328c` | Native root FD transfer between disposable processes and use after sender close. |
+| 7 | `build/request_dirs-probe/lapy_request_dirs_probe.elf` | See current build manifest | One-shot observation of a new `PPSA99995` request before elevation; it acknowledges without elevation. |
 
 The corresponding build IDs are, respectively,
 `a0b230010a01b8bb21b2c4e2e33ce849d3d5875247fc569713503d5cdde2d89c`,
@@ -56,3 +57,11 @@ Step 6 has also completed on 12.02. Its child closes the inherited root FD
 before receiving a new one, then verifies directory identity and use after
 the parent closes its copy. This tests cross-process transport in the same
 root context, not delivery into a sandboxed game or launcher.
+
+Step 7 was built and run once on 12.02. The title launcher did not pass the
+lab supervisor's service preflight because `shsrv` was unavailable; the
+observer correctly timed out with a complete, identity-bound ps5log/1 stream
+and did not claim a target observation. When the service is healthy, repeat
+the one-shot procedure in `TARGET_DIRECTORY_PROBE.md` with the old daemon
+stopped and the exact lab title, then close it. Do not treat the timeout as
+evidence about the target's root or jail slots.
