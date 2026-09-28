@@ -1,9 +1,9 @@
-# Repeated elevation: investigation and build status
+# Repeated elevation: historical investigation
 
-This branch provides a source-pinned **legacy comparison build**, not the native
-reference-lifetime fix. No runtime optimization or crash correction is claimed.
-`make` refuses to select an unsafe backend implicitly. `make legacy` builds the
-old elevation mechanism explicitly, for offline inspection. It does not deploy.
+This investigation predates the corrected FW 12.02 backend. The current
+default is the cooperative daemon in [OWNED_ROOT_DAEMON.md](OWNED_ROOT_DAEMON.md).
+`make legacy` still builds the old mechanism explicitly for comparison.
+Other firmware remains unvalidated.
 
 ## Source and artifact identity
 
@@ -51,12 +51,12 @@ Later builds work offline. Output is kept separately under `build/legacy/`:
 
 The inherited top-level ELF is never overwritten. Generated files and dependency
 checkouts are ignored. Dependency license: its `LICENSE.txt` contains GPLv2;
-the original Lapy MIT notice remains intact. No new binary release is published.
+the original Lapy MIT notice remains intact. The legacy ELF is not released.
 The selected dependency has an upstream format warning in `dbg.cpp`; build logs
 retain it. A successful cross-link establishes no firmware compatibility or
 runtime safety.
 
-## Native backend still required
+## Original native-backend requirements
 
 The inspected SDK exposes kernel memory reads/writes and raw setters, not a
 verified native credential/vnode transaction. FreeBSD header declarations do
@@ -64,7 +64,8 @@ not provide callable PS5 symbols. The inspected [kstuff-lite 12.02 table](https:
 does not supply the required vnode/credential functions. This is a limitation
 of the inspected paths, not proof that no usable implementation exists elsewhere.
 
-Before replacing the legacy operation, implement and verify all of:
+The following requirements informed the FW 12.02 implementation. Revalidate
+them before porting to another firmware:
 
 1. Resolve the requested PID to a live, retained process identity and coordinate
    with exit, exec and competing credential changes. Do not trust a cached PID.
@@ -124,6 +125,7 @@ Exercise failure paths and concurrency. Host tests and clean compilation cannot
 establish vnode ownership or kernel cleanup. Global vnode counters may change
 because of unrelated activity, so before/after snapshots alone are insufficient.
 
-Two reported crashes after repeated elevations motivate this investigation but
-do not prove the cause or establish a safe number of launches. No console was
-used to validate this branch.
+Repeated-elevation crashes motivated this investigation but did not prove
+the exact kernel panic cause or establish a universally safe count. The later
+FW 12.02 cooperative backend was validated on the console as described in
+[OWNED_ROOT_DAEMON.md](OWNED_ROOT_DAEMON.md).
