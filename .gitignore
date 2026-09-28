@@ -3,8 +3,11 @@
 *.d
 *.a
 
-# Python scripts (helpers, not part of release)
-*.py
+# Private dependency checkouts and generated artifacts
+/.deps/
+/build/
+*.elf
+# Python cache
 __pycache__/
 
 # Backup files

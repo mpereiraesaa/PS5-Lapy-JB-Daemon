@@ -1,49 +1,18 @@
-# Lapy JB Daemon v1.2 — multi-firmware standalone payload.
-#
-# Build flow :
-#   - main.o + offsets_v940.o compiled from source/
-#   - linked against vanilla libhijacker.a (place at extern/libhijacker/)
-#   - offsets_v940.o is listed BEFORE -lhijacker so the linker resolves the
-#     offsets:: namespace symbols from that object and skips libhijacker's
-#     vanilla offsets.cpp.o (which would hardcode fw 9.40 only).
-#
-# Result : a binary that works on every fw covered by ps5-payload-sdk + kstuff
-# (3.00 -> 12.00), with no fw-specific code in this repo.
+# A native reference-safe backend is not available yet. The inherited ELF is
+# never treated as the output of a successful new build.
+PYTHON ?= python3
+export PS5_PAYLOAD_SDK
+export PS5_CXXRT
 
-PS5_HOST ?= 192.168.1.28
-PS5_PORT ?= 9021
+.PHONY: all legacy check
+all:
+	@echo 'Native reference-safe elevation unavailable; see docs/ELEVATION.md.' >&2
+	@echo 'For an offline legacy comparison build only: make legacy.' >&2
+	@exit 1
 
-ifndef PS5_PAYLOAD_SDK
-    $(error PS5_PAYLOAD_SDK undefined. Set to your ps5-payload-sdk path)
-endif
+legacy:
+	$(PYTHON) tools/build.py --legacy --fetch-deps
 
-include $(PS5_PAYLOAD_SDK)/toolchain/prospero.mk
-
-ELF := lapy_jb_daemon.elf
-
-LIBHIJACKER_DIR := extern/libhijacker
-LIBHIJACKER_INC := $(LIBHIJACKER_DIR)/include
-
-CXXFLAGS := -std=c++20 -Wall -O2 -fno-rtti -fno-exceptions
-CXXFLAGS += -I$(LIBHIJACKER_INC) -Isource
-
-LDFLAGS := -L$(LIBHIJACKER_DIR)
-LDLIBS  := -lhijacker -lkernel_sys -lSceNotification
-
-OBJS := source/main.o source/offsets_v940.o
-
-all: $(ELF)
-
-source/%.o: source/%.cpp
-	$(CXX) $(CXXFLAGS) -c -o $@ $<
-
-# offsets_v940.o is listed BEFORE -lhijacker in the link line so its symbols
-# satisfy libhijacker's offsets:: refs before the archive's offsets.cpp.o
-# can be pulled in.
-$(ELF): $(OBJS) $(LIBHIJACKER_DIR)/libhijacker.a
-	$(CXX) $(CXXFLAGS) -o $@ $(OBJS) $(LDFLAGS) $(LDLIBS)
-
-clean:
-	rm -f $(ELF) $(OBJS)
-
-.PHONY: all clean
+check:
+	$(PYTHON) -m unittest discover -s tests -v
+	git diff --check
