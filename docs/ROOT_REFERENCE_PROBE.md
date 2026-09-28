@@ -49,5 +49,15 @@ only name, error, canonical-pointer classification and reported symbol size.
 An observed symbol does not prove its calling convention, lock ordering, or
 that it is safe to invoke from Lapy; a missing symbol does not prove the
 function itself is absent. This path may allow runtime multi-firmware symbol
-resolution **if** the console exposes suitable symbols, but no such result
-has yet been observed.
+resolution **if** another firmware exposes suitable symbols.
+
+On owned firmware 12.02, the corrected probe build
+`a0b230010a01b8bb21b2c4e2e33ce849d3d5875247fc569713503d5cdde2d89c`
+(ELF SHA256 `33e14b050e51eab5613d0d447ebd2006e2aee19873d6e5ba72061b228133726d`)
+logged all nine valid symbol names and their nonzero lengths, with `ENOSYS`
+(78) for every `kldsym` call. The private `ps5log/1` session has a clean BYE
+and no sequence gaps. This closes the `kldsym` lookup path on
+12.02, not the possibility of a different native adapter. The first probe
+build used a static pointer table whose entries appeared null at runtime, so
+its nine `ENOSYS` results alone were ambiguous; the corrected build passes
+each name literal directly and logs it alongside the result.

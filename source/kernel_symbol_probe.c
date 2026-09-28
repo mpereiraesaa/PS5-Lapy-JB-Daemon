@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <ps5/kernel.h>
 #include <stdint.h>
+#include <string.h>
 #include <sys/param.h>
 #include <sys/linker.h>
 #include <sys/syscall.h>
@@ -27,38 +28,43 @@ static int checked_kldsym(struct kld_sym_lookup *lookup)
                   : (value == 0 ? 0 : EPROTO);
 }
 
+static unsigned lookup_one(const char *symbol)
+{
+    struct kld_sym_lookup lookup = {
+        .version = sizeof(lookup), .symname = (char *)symbol
+    };
+    int error = checked_kldsym(&lookup);
+    uintptr_t address = (uintptr_t)lookup.symvalue;
+    int canonical = address && (address >> 48) == UINT64_C(0xffff);
+    ps5log_printf(PS5LOG_MARK,
+                  "symbol_result build=%s name=%s name_len=%zu error=%d canonical=%d size=%zu",
+                  LAPY_PROBE_ID, symbol, strlen(symbol), error, canonical,
+                  error ? 0 : lookup.symsize);
+    return !error && canonical;
+}
+
 int main(void)
 {
-    static const char *const symbols[] = {
-        "copyin", "copyout", "vref", "vrele", "fdunshare",
-        "fdcopy", "sx_xlock", "sx_xunlock", "proc_rele"
-    };
     unsigned found = 0;
     if (ps5log_init_default("LAPYSYM", "lapy-kernel-symbol-probe"))
         return 2;
     ps5log_printf(PS5LOG_MARK,
                   "probe_start build=%s firmware=%08x count=%u mode=lookup-only",
-                  LAPY_PROBE_ID, kernel_get_fw_version(),
-                  (unsigned)(sizeof(symbols) / sizeof(symbols[0])));
-    for (unsigned i = 0; i < sizeof(symbols) / sizeof(symbols[0]); ++i) {
-        struct kld_sym_lookup lookup = {
-            .version = sizeof(lookup), .symname = (char *)symbols[i]
-        };
-        int error = checked_kldsym(&lookup);
-        uintptr_t address = (uintptr_t)lookup.symvalue;
-        int canonical = address && (address >> 48) == UINT64_C(0xffff);
-        if (!error && canonical) ++found;
-        /* Never print a kernel pointer or address delta. For a usable symbol,
-         * the future native adapter must resolve and validate it itself. */
-        ps5log_printf(PS5LOG_MARK,
-                      "symbol_result build=%s name=%s error=%d canonical=%d size=%zu",
-                      LAPY_PROBE_ID, symbols[i], error, canonical,
-                      error ? 0 : lookup.symsize);
-    }
+                  LAPY_PROBE_ID, kernel_get_fw_version(), 9u);
+    /* Pass literals directly: the PS5 ELF loader may not relocate a static
+     * array of string pointers. A null name invalidates the lookup result. */
+    found += lookup_one("copyin");
+    found += lookup_one("copyout");
+    found += lookup_one("vref");
+    found += lookup_one("vrele");
+    found += lookup_one("fdunshare");
+    found += lookup_one("fdcopy");
+    found += lookup_one("sx_xlock");
+    found += lookup_one("sx_xunlock");
+    found += lookup_one("proc_rele");
     ps5log_printf(PS5LOG_MARK,
                   "probe_result build=%s found=%u total=%u lookup_only=1",
-                  LAPY_PROBE_ID, found,
-                  (unsigned)(sizeof(symbols) / sizeof(symbols[0])));
+                  LAPY_PROBE_ID, found, 9u);
     ps5log_close("probe-complete");
     return 0;
 }
