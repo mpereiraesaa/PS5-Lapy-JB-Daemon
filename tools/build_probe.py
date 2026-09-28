@@ -19,7 +19,7 @@ def main():
     parser.add_argument("--logging-client", type=Path, required=True)
     parser.add_argument("--exclusive-receiver", action="store_true",
                         help="test explicit CLOEXEC setup in this non-execing probe only")
-    parser.add_argument("--probe", choices=("transport", "cross-process-directory", "credentials", "vfs", "cross-root", "sysent", "root-refs", "root-native-refs", "kernel-symbols", "filedesc-unshare", "target-dirs", "request-dirs", "donor-filedesc", "null-jail-transfer", "old-root-release"), default="transport")
+    parser.add_argument("--probe", choices=("transport", "cross-process-directory", "credentials", "vfs", "cross-root", "sysent", "root-refs", "root-native-refs", "kernel-symbols", "filedesc-unshare", "target-dirs", "request-dirs", "donor-filedesc", "null-jail-transfer", "old-root-release", "ptrace-quiescence"), default="transport")
     parser.add_argument("--target-pid", type=int,
                         help="live process PID to observe; required only for target-dirs")
     parser.add_argument("--sony-privileges", action="store_true",
@@ -58,7 +58,8 @@ def main():
              "request-dirs": ("request_directory_probe.c",),
              "donor-filedesc": ("donor_filedesc_probe.c",),
              "null-jail-transfer": ("donor_null_jail_transfer_probe.c",),
-             "old-root-release": ("donor_old_root_probe.c",)}[args.probe]
+             "old-root-release": ("donor_old_root_probe.c",),
+             "ptrace-quiescence": ("ptrace_quiescence_probe.c",)}[args.probe]
     files = [ROOT / "source" / name for name in names]
     inputs = {str(p.relative_to(ROOT)): sha(p) for p in files}
     inputs["external/ps5log.h"] = sha(logging / "ps5log.h")
@@ -66,6 +67,8 @@ def main():
     sdk_inputs = {str(p.relative_to(sdk)): sha(p)
                   for p in sorted((sdk / "target").rglob("*")) if p.is_file()}
     flags = ["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror"]
+    if args.probe == "ptrace-quiescence":
+        flags.append("-pthread")
     if args.exclusive_receiver:
         flags.append("-DLAPY_PROBE_EXCLUSIVE=1")
     if args.sony_privileges:
@@ -87,7 +90,8 @@ def main():
             "target-dirs": "target_dirs", "request-dirs": "request_dirs",
             "donor-filedesc": "donor_filedesc",
             "null-jail-transfer": "null_jail_transfer",
-            "old-root-release": "old_root_release"}[args.probe]
+            "old-root-release": "old_root_release",
+            "ptrace-quiescence": "ptrace_quiescence"}[args.probe]
     output = ROOT / ("build/probe" if args.probe == "transport" else
                      f"build/{stem}-probe/pid-{args.target_pid}" if args.probe == "target-dirs" else
                      f"build/{stem}-probe")
@@ -123,7 +127,8 @@ def main():
                                             "request-dirs": "live-request-directory-read-only",
                                             "donor-filedesc": "donor-filedesc-native-rfork-read-only",
                                             "null-jail-transfer": "null-jail-two-donor-pointer-transfer",
-                                            "old-root-release": "old-root-native-donor-release"}[args.probe],
+                                            "old-root-release": "old-root-native-donor-release",
+                                            "ptrace-quiescence": "disposable-multithread-ptrace-quiescence"}[args.probe],
                                    "receiver": ("exclusive" if args.exclusive_receiver else "atomic")
                                                if args.probe == "transport" else None,
                                    "target_pid": args.target_pid if args.probe == "target-dirs" else None,
