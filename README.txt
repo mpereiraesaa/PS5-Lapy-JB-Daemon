@@ -1,11 +1,12 @@
 FORK STATUS (mpereiraesaa)
 -------------------------
-Native reference-safe repeated elevation is NOT implemented or validated yet.
-The inherited lapy_jb_daemon.elf is an upstream artifact, not a fixed release.
-Do not use this fork as a remedy for repeated-launch crashes yet.
+The current fork and release are documented in README.md. A cooperative
+owned-root backend was validated on FW 12.02 only. It uses the new
+/download0/elevate_proc marker. The inherited lapy_jb_daemon.elf remains
+an upstream artifact, not the corrected release ELF.
 
 The original build required a libhijacker.a that was not present in Git.
-This branch adds an explicit, source-pinned LEGACY comparison build:
+This branch also retains an explicit, source-pinned LEGACY comparison build:
 
   PS5_PAYLOAD_SDK=/path/to/sdk/install PS5_CXXRT=/path/to/cxxrt make legacy
   make check

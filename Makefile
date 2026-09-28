@@ -1,15 +1,21 @@
-# A native reference-safe backend is not available yet. The inherited ELF is
-# never treated as the output of a successful new build.
+# The owned-root backend is firmware-gated to 12.02 and requires a cooperative
+# title credential clone before each elevation request.
 PYTHON ?= python3
 HOST_CC ?= cc
+LOGGING_CLIENT ?= ../logging_server/client
 export PS5_PAYLOAD_SDK
 export PS5_CXXRT
 
-.PHONY: all legacy check check-native native-components
-all:
-	@echo 'Native reference-safe elevation unavailable; see docs/ELEVATION.md.' >&2
-	@echo 'For an offline legacy comparison build only: make legacy.' >&2
-	@exit 1
+.PHONY: all owned-service owned-one-shot legacy check check-native native-components
+all: owned-service
+
+owned-service:
+	test -n "$(PS5_PAYLOAD_SDK)"
+	$(PYTHON) tools/build_owned_daemon.py --sdk "$(PS5_PAYLOAD_SDK)" --logging-client "$(LOGGING_CLIENT)" --service
+
+owned-one-shot:
+	test -n "$(PS5_PAYLOAD_SDK)"
+	$(PYTHON) tools/build_owned_daemon.py --sdk "$(PS5_PAYLOAD_SDK)" --logging-client "$(LOGGING_CLIENT)"
 
 legacy:
 	$(PYTHON) tools/build.py --legacy --fetch-deps
