@@ -65,3 +65,47 @@ process with an old root distinct from the system root. It would not validate
 real-title PID retention, target credential cloning, all-thread behavior in
 games, or repeat-safe production elevation. Those still need integration and
 lifecycle testing.
+
+The first FW 12.02 hardware attempt reached `target_ready` with two threads,
+private filedesc and one native `/data` reference. Host ps5debug-NG rejected
+`DEBUG_ATTACH` before stopping the child. The probe timed out at `target_stop`
+with `moved=0`, emitted `BYE reason=probe-failed`, and cleaned up both payload
+processes. It provides no evidence for or against the reference transaction.
+The ps5debug server dials back to host port 755; that low-port proxy was not
+active for this attempt.
+
+For a separate disposable **reference-lifetime** test, build with
+`--probe retained-nonroot --self-stop` and the same SDK/logging-client options.
+The parent sends `SIGSTOP` to its own target after `target_ready`; it still
+requires two identical stopped snapshots and a private filedesc before moving
+any reference. `release_child` sends `SIGCONT` before native exit. This variant
+does not test ps5debug attachment or retained identity of an unrelated title.
+It has an isolated artifact directory, `build/retained_nonroot-probe/self-stop/`,
+and a manifest field `self_stop=true`. Its prepared build ID is
+`8e49c7d6c9349dc4dd3614714b8866cfeaa23fe12ed78d0f0c53aa3fef62679a`;
+ELF SHA-256 is
+`bb764c5d170091bd68d09c6e133bb210ddece49837eb77a42f8accc301bb326d`.
+Under the console lease with the `ps5log/1` receiver active, run exactly one
+cycle using:
+
+```sh
+python3 tools/run_retained_nonroot_self_stop.py --host "$PS5_HOST" \
+  --runs ../logging_server/runs
+```
+
+The runner checks the ELF, build manifest, complete stream and native release
+with the existing artifact-bound analyzer. If it reports `probe_held`, leave
+the payload and its owners untouched for attended repair. A pass proves only
+the disposable reference transaction and final balance on this firmware.
+
+The first self-stop console cycle passed on FW 12.02. Its clean private stream
+is `20260928T094836049Z_LAPYNROOT_lapy-retained-nonroot-old_0x235750bebf25`
+(log SHA-256
+`44982a9407ca87c117d840f8a20b20e609ec50d9a3acfa864634fb8b89e08de7`).
+The artifact-bound analyzer reported `balanced=true` and
+`intermediate_interference=false`; root hold/use began at 69/68, `/data` at
+3/3, and both returned to those exact baselines after native donor and target
+exit. The complete result includes all three reaped children and a clean BYE.
+No payload process remained after the run. This is concrete FW 12.02 evidence
+for reference ownership across the disposable transfer, not yet evidence for
+a live title's credential propagation, PID retention or repeat-safe daemon.

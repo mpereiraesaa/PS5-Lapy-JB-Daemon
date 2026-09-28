@@ -25,6 +25,9 @@
 #define ROOT_HOLD 0x1bcu
 #define ROOT_USE 0x1c0u
 #define MAX_THREADS 16u
+#ifndef LAPY_SELF_STOP
+#define LAPY_SELF_STOP 0
+#endif
 
 struct child {
     pid_t pid;
@@ -262,8 +265,8 @@ int main(void)
     if (ps5log_init_default("LAPYNROOT", "lapy-retained-nonroot-old"))
         return 2;
     ps5log_printf(PS5LOG_MARK,
-                  "probe_start build=%s firmware=%08x mode=retained-nonroot-old",
-                  LAPY_PROBE_ID, kernel_get_fw_version());
+                  "probe_start build=%s firmware=%08x mode=retained-nonroot-old self_stop=%d",
+                  LAPY_PROBE_ID, kernel_get_fw_version(), LAPY_SELF_STOP);
     if (kernel_get_fw_version() != 0x12020000 ||
         KERNEL_OFFSET_PROC_P_PID != PROC_PID_OFFSET ||
         !KERNEL_OFFSET_FILEDESC_FD_RDIR ||
@@ -312,6 +315,10 @@ int main(void)
                   initial.fd_refs == 1, initial.root == root,
                   !initial.jail, initial.cwd == data);
     stage = "target_stop";
+#if LAPY_SELF_STOP
+    if (kill(target.pid, SIGSTOP)) { error = errno ? errno : EIO; goto done; }
+    target.stop_sent = 1;
+#endif
     if ((error = await_stop(&target, root, data, &stopped))) goto done;
     ps5log_printf(PS5LOG_MARK,
                   "target_stopped build=%s pid=%d threads=%u suspended=%u",
