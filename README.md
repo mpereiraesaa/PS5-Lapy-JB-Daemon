@@ -51,7 +51,7 @@ PS5_PAYLOAD_SDK=/path/to/ps5-payload-sdk make check
 PS5_PAYLOAD_SDK=/path/to/ps5-payload-sdk make owned-service
 ```
 
-The ELF is `build/owned_root_daemon-service/lapy_owned_root_daemon.elf`.
+The ELF is `build/owned_root_daemon-service/lapy-root-daemon.elf`.
 Load it once via an ELF loader; it stays resident and watches `PPSA*` requests.
 For a bounded diagnostic build, pass `--service --max-requests N` to
 `tools/build_owned_daemon.py`. The daemon emits machine-readable `ps5log/1`
