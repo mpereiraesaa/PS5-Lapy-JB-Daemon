@@ -19,7 +19,7 @@ def main():
     parser.add_argument("--logging-client", type=Path, required=True)
     parser.add_argument("--exclusive-receiver", action="store_true",
                         help="test explicit CLOEXEC setup in this non-execing probe only")
-    parser.add_argument("--probe", choices=("transport", "cross-process-directory", "credentials", "vfs", "cross-root", "sysent", "root-refs", "root-native-refs", "kernel-symbols", "filedesc-unshare", "target-dirs", "request-dirs", "donor-filedesc", "null-jail-transfer", "old-root-release", "ptrace-quiescence", "signal-quiescence", "thread-stop-calibration", "move-only"), default="transport")
+    parser.add_argument("--probe", choices=("transport", "cross-process-directory", "credentials", "vfs", "cross-root", "sysent", "root-refs", "root-native-refs", "kernel-symbols", "filedesc-unshare", "target-dirs", "request-dirs", "donor-filedesc", "null-jail-transfer", "old-root-release", "ptrace-quiescence", "signal-quiescence", "thread-stop-calibration", "live-target-stop", "move-only"), default="transport")
     parser.add_argument("--target-pid", type=int,
                         help="live process PID to observe; required only for target-dirs")
     parser.add_argument("--sony-privileges", action="store_true",
@@ -63,6 +63,7 @@ def main():
              "ptrace-quiescence": ("ptrace_quiescence_probe.c",),
              "signal-quiescence": ("signal_quiescence_probe.c",),
              "thread-stop-calibration": ("thread_stop_calibration_probe.c",),
+             "live-target-stop": ("live_target_stop_probe.c",),
              "move-only": ("donor_move_only_probe.c", "donor_transaction.c",
                            "donor_transaction.h")}[args.probe]
     files = [ROOT / "source" / name for name in names]
@@ -99,6 +100,7 @@ def main():
             "ptrace-quiescence": "ptrace_quiescence",
             "signal-quiescence": "signal_quiescence",
             "thread-stop-calibration": "thread_stop_calibration",
+            "live-target-stop": "live_target_stop",
             "move-only": "move_only"}[args.probe]
     output = ROOT / ("build/probe" if args.probe == "transport" else
                      f"build/{stem}-probe/pid-{args.target_pid}" if args.probe == "target-dirs" else
@@ -139,6 +141,7 @@ def main():
                                             "ptrace-quiescence": "disposable-multithread-ptrace-quiescence",
                                             "signal-quiescence": "disposable-multithread-signal-quiescence",
                                             "thread-stop-calibration": "disposable-thread-and-stop-field-calibration",
+                                            "live-target-stop": "live-title-signal-stop-read-only",
                                             "move-only": "move-only-donor-reference-round-trip"}[args.probe],
                                    "receiver": ("exclusive" if args.exclusive_receiver else "atomic")
                                                if args.probe == "transport" else None,
