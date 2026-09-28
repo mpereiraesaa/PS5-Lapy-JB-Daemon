@@ -13,13 +13,13 @@ one, compare its SHA256 to the listed value; a rebuild changes its identity.
 
 | Order | Probe | Local ELF SHA256 | What it can establish |
 | --- | --- | --- | --- |
-| 1 | `build/kernel_symbols-probe/lapy_kernel_symbols_probe.elf` | `20ef833491ffc845dfd04e6621b6b296d50f473b5549edcf54a10a75947f4ec2` | Whether native kernel names are exposed through `kldsym`; it never calls them. |
+| 1 | `build/kernel_symbols-probe/lapy_kernel_symbols_probe.elf` | `33e14b050e51eab5613d0d447ebd2006e2aee19873d6e5ba72061b228133726d` | Whether native kernel names are exposed through `kldsym`; it never calls them. |
 | 2 | `build/filedesc_unshare-probe/lapy_filedesc_unshare_probe.elf` | `e6acb6a1e13a380226e17e555ba30bb8ab4d00156efd3f614bfe38840525a941` | Whether native `rfork(RFFDG)` separates a deliberately shared table in the disposable probe. |
 | 3 | Build `target-dirs` for the **actual live PID** | Per-PID manifest | Whether that target's original root/jail slots are null or equal before any escalation. |
 | 4 | `build/root_refs-probe/lapy_root_refs_probe.elf` | `e6cb3ea4002bda4e1359ad3847d305b6776be5d20ddc690a732374c58a937c68` | Small root-vnode field changes across a bounded observation window. |
 
 The corresponding build IDs are, respectively,
-`ee315174cb12662dbdf2c9e52c8e289dc4d4916378c6ce7d88df80c300b6c0c8`,
+`a0b230010a01b8bb21b2c4e2e33ce849d3d5875247fc569713503d5cdde2d89c`,
 `080d47d7cff73fe2b803f9d68b7924f65a4d2ecf3dcc947639c61ceb7bd119b1`,
 and `2f4a86fa1c819f021ed298d448bcb00d96d2daa275534343e7305d0a5ae949bf`.
 For step 3, follow `TARGET_DIRECTORY_PROBE.md`; the offline PID 4242 ELF is

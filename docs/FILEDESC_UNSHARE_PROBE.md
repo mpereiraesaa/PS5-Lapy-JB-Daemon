@@ -51,3 +51,12 @@ through native paths. Running `rfork(RFFDG)` in Lapy would isolate Lapy only.
 The root-reference and symbol probes in `ROOT_REFERENCE_PROBE.md` address
 different parts of the same transaction. Do not resume repeated legacy
 escalations based on this probe's result alone.
+
+On owned firmware 12.02, build
+`080d47d7cff73fe2b803f9d68b7924f65a4d2ecf3dcc947639c61ceb7bd119b1`
+(ELF SHA256 `e6acb6a1e13a380226e17e555ba30bb8ab4d00156efd3f614bfe38840525a941`)
+completed this self-test. The private `ps5log/1` stream has a clean BYE and no
+gaps; the identity-bound analyzer reported `supported: true`, a unique
+four-byte candidate at `0x34`, and the `1→2→separate 1/1` transition. This
+does not establish that Lapy can make the target process call `rfork(RFFDG)`
+or that its directory slots are safe to edit afterward.
