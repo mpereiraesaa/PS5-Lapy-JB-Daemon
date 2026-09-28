@@ -19,7 +19,9 @@ def main():
     parser.add_argument("--logging-client", type=Path, required=True)
     parser.add_argument("--exclusive-receiver", action="store_true",
                         help="test explicit CLOEXEC setup in this non-execing probe only")
-    parser.add_argument("--probe", choices=("transport", "credentials", "vfs", "cross-root", "sysent", "root-refs", "kernel-symbols", "filedesc-unshare"), default="transport")
+    parser.add_argument("--probe", choices=("transport", "credentials", "vfs", "cross-root", "sysent", "root-refs", "kernel-symbols", "filedesc-unshare", "target-dirs"), default="transport")
+    parser.add_argument("--target-pid", type=int,
+                        help="live process PID to observe; required only for target-dirs")
     parser.add_argument("--sony-privileges", action="store_true",
                         help="temporarily change Sony fields after native credential replacement, cross-root probe only")
     parser.add_argument("--root-identity", action="store_true",
@@ -35,6 +37,11 @@ def main():
         parser.error("--root-identity requires --probe cross-root")
     if args.cwd_root and args.probe != "cross-root":
         parser.error("--cwd-root requires --probe cross-root")
+    if args.probe == "target-dirs":
+        if args.target_pid is None or not 2 <= args.target_pid <= 2147483647:
+            parser.error("--target-dirs requires a positive 32-bit --target-pid")
+    elif args.target_pid is not None:
+        parser.error("--target-pid requires --probe target-dirs")
     sdk = Path(args.sdk).resolve()
     logging = args.logging_client.resolve()
     names = {"transport": ("native_probe.c", "native_directory.c", "native_directory.h"),
@@ -44,7 +51,8 @@ def main():
              "sony_scope.c", "sony_scope.h"), "sysent": ("sysent_probe.c",),
              "root-refs": ("root_reference_probe.c",),
              "kernel-symbols": ("kernel_symbol_probe.c",),
-             "filedesc-unshare": ("filedesc_unshare_probe.c",)}[args.probe]
+             "filedesc-unshare": ("filedesc_unshare_probe.c",),
+             "target-dirs": ("target_directory_probe.c",)}[args.probe]
     files = [ROOT / "source" / name for name in names]
     inputs = {str(p.relative_to(ROOT)): sha(p) for p in files}
     inputs["external/ps5log.h"] = sha(logging / "ps5log.h")
@@ -60,13 +68,18 @@ def main():
         flags.append("-DLAPY_PROBE_ROOT_IDENTITY=1")
     if args.cwd_root:
         flags.append("-DLAPY_PROBE_CWD_ROOT=1")
+    if args.target_pid is not None:
+        flags.append(f"-DLAPY_TARGET_PID={args.target_pid}")
     identity = hashlib.sha256(json.dumps({"inputs": inputs, "sdk": sdk_inputs,
                                          "flags": flags}, sort_keys=True).encode()).hexdigest()
     stem = {"transport": "native", "credentials": "credential", "vfs": "vfs",
             "cross-root": "cross_root", "sysent": "sysent",
             "root-refs": "root_refs", "kernel-symbols": "kernel_symbols",
-            "filedesc-unshare": "filedesc_unshare"}[args.probe]
-    output = ROOT / ("build/probe" if args.probe == "transport" else f"build/{stem}-probe")
+            "filedesc-unshare": "filedesc_unshare",
+            "target-dirs": "target_dirs"}[args.probe]
+    output = ROOT / ("build/probe" if args.probe == "transport" else
+                     f"build/{stem}-probe/pid-{args.target_pid}" if args.probe == "target-dirs" else
+                     f"build/{stem}-probe")
     output.mkdir(parents=True, exist_ok=True)
     header = output / "probe_identity.h"
     header.write_text('#define LAPY_PROBE_ID "' + identity + '"\n')
@@ -91,9 +104,11 @@ def main():
                                             "sysent": "sysent-read-only",
                                             "root-refs": "root-vnode-read-only",
                                             "kernel-symbols": "kernel-symbol-lookup-only",
-                                            "filedesc-unshare": "self-filedesc-native-unshare"}[args.probe],
+                                            "filedesc-unshare": "self-filedesc-native-unshare",
+                                            "target-dirs": "target-directory-read-only"}[args.probe],
                                    "receiver": ("exclusive" if args.exclusive_receiver else "atomic")
                                                if args.probe == "transport" else None,
+                                   "target_pid": args.target_pid if args.probe == "target-dirs" else None,
                                    "console_validated": False}, indent=2, sort_keys=True) + "\n")
     print(f"Built {elf.relative_to(ROOT)}\nbuild_id={identity}\nsha256={sha(elf)}")
 
