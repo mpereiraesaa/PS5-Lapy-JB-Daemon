@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +23,8 @@ def main():
     parser.add_argument("--probe", choices=("transport", "cross-process-directory", "credentials", "vfs", "cross-root", "sysent", "root-refs", "root-native-refs", "kernel-symbols", "filedesc-unshare", "target-dirs", "request-dirs", "donor-filedesc", "null-jail-transfer", "old-root-release", "ptrace-quiescence", "signal-quiescence", "thread-stop-calibration", "live-target-stop", "debug-retention", "move-only", "retained-cross-process", "preentry-log"), default="transport")
     parser.add_argument("--target-pid", type=int,
                         help="live process PID to observe; required only for target-dirs")
+    parser.add_argument("--target-title",
+                        help="PPSA title to observe; valid only for live-target-stop")
     parser.add_argument("--sony-privileges", action="store_true",
                         help="temporarily change Sony fields after native credential replacement, cross-root probe only")
     parser.add_argument("--root-identity", action="store_true",
@@ -42,6 +45,9 @@ def main():
             parser.error("--target-dirs requires a positive 32-bit --target-pid")
     elif args.target_pid is not None:
         parser.error("--target-pid requires --probe target-dirs")
+    if args.target_title is not None:
+        if args.probe != "live-target-stop" or not re.fullmatch(r"PPSA[0-9]{5}", args.target_title):
+            parser.error("--target-title requires --probe live-target-stop and a PPSA title ID")
     sdk = Path(args.sdk).resolve()
     logging = args.logging_client.resolve()
     names = {"transport": ("native_probe.c", "native_directory.c", "native_directory.h"),
@@ -95,6 +101,8 @@ def main():
         flags.append("-DLAPY_PROBE_CWD_ROOT=1")
     if args.target_pid is not None:
         flags.append(f"-DLAPY_TARGET_PID={args.target_pid}")
+    if args.target_title is not None:
+        flags.append(f'-DLAPY_TARGET_TITLE="{args.target_title}"')
     identity = hashlib.sha256(json.dumps({"inputs": inputs, "sdk": sdk_inputs,
                                          "flags": flags}, sort_keys=True).encode()).hexdigest()
     stem = {"transport": "native", "credentials": "credential", "vfs": "vfs",
@@ -117,6 +125,7 @@ def main():
             "preentry-log": "preentry_log"}[args.probe]
     output = ROOT / ("build/probe" if args.probe == "transport" else
                      f"build/{stem}-probe/pid-{args.target_pid}" if args.probe == "target-dirs" else
+                     f"build/{stem}-probe/{args.target_title}" if args.probe == "live-target-stop" and args.target_title else
                      f"build/{stem}-probe")
     output.mkdir(parents=True, exist_ok=True)
     header = output / "probe_identity.h"
@@ -177,6 +186,7 @@ def main():
                                    "receiver": ("exclusive" if args.exclusive_receiver else "atomic")
                                                if args.probe == "transport" else None,
                                    "target_pid": args.target_pid if args.probe == "target-dirs" else None,
+                                   "target_title": args.target_title if args.probe == "live-target-stop" else None,
                                    "console_validated": False}, indent=2, sort_keys=True) + "\n")
     print(f"Built {elf.relative_to(ROOT)}\nbuild_id={identity}\nsha256={sha(elf)}")
 
