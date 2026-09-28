@@ -1,4 +1,4 @@
-"""Build the bounded PS5 transport probe; never deploy it."""
+"""Build a bounded PS5 native capability probe; never deploy it."""
 import argparse
 import hashlib
 import json
@@ -19,11 +19,15 @@ def main():
     parser.add_argument("--logging-client", type=Path, required=True)
     parser.add_argument("--exclusive-receiver", action="store_true",
                         help="test explicit CLOEXEC setup in this non-execing probe only")
+    parser.add_argument("--probe", choices=("transport", "credentials"), default="transport")
     args = parser.parse_args()
+    if args.probe != "transport" and args.exclusive_receiver:
+        parser.error("--exclusive-receiver requires --probe transport")
     sdk = Path(args.sdk).resolve()
     logging = args.logging_client.resolve()
-    files = [ROOT / "source" / name for name in
-             ("native_probe.c", "native_directory.c", "native_directory.h")]
+    names = (("native_probe.c", "native_directory.c", "native_directory.h")
+             if args.probe == "transport" else ("credential_probe.c",))
+    files = [ROOT / "source" / name for name in names]
     inputs = {str(p.relative_to(ROOT)): sha(p) for p in files}
     inputs["external/ps5log.h"] = sha(logging / "ps5log.h")
     inputs["tools/build_probe.py"] = sha(Path(__file__).resolve())
@@ -34,17 +38,17 @@ def main():
         flags.append("-DLAPY_PROBE_EXCLUSIVE=1")
     identity = hashlib.sha256(json.dumps({"inputs": inputs, "sdk": sdk_inputs,
                                          "flags": flags}, sort_keys=True).encode()).hexdigest()
-    output = ROOT / "build/probe"
+    output = ROOT / ("build/probe" if args.probe == "transport" else "build/credential-probe")
     output.mkdir(parents=True, exist_ok=True)
     header = output / "probe_identity.h"
     header.write_text('#define LAPY_PROBE_ID "' + identity + '"\n')
-    elf = output / "lapy_native_probe.elf"
+    elf = output / ("lapy_native_probe.elf" if args.probe == "transport" else "lapy_credential_probe.elf")
     manifest = output / "manifest.json"
     elf.unlink(missing_ok=True)
     manifest.unlink(missing_ok=True)
     command = [str(sdk / "bin/prospero-clang"), *flags, "-I" + str(logging),
                "-I" + str(output), "-I" + str(ROOT / "source"),
-               str(files[0]), str(files[1]), "-o", str(elf)]
+               *[str(p) for p in files if p.suffix == ".c"], "-o", str(elf)]
     with (output / "build.log").open("w") as log:
         log.write(json.dumps(command) + "\n")
         log.flush()
@@ -53,8 +57,10 @@ def main():
         raise RuntimeError("Output is not ELF")
     manifest.write_text(json.dumps({"schema": "lapy-probe-build/1", "build_id": identity,
                                    "inputs_sha256": inputs, "sdk_inputs_sha256": sdk_inputs,
-                                   "elf_sha256": sha(elf), "mode": "transport-only",
-                                   "receiver": "exclusive" if args.exclusive_receiver else "atomic",
+                                   "elf_sha256": sha(elf),
+                                   "mode": "transport-only" if args.probe == "transport" else "same-euid",
+                                   "receiver": ("exclusive" if args.exclusive_receiver else "atomic")
+                                               if args.probe == "transport" else None,
                                    "console_validated": False}, indent=2, sort_keys=True) + "\n")
     print(f"Built {elf.relative_to(ROOT)}\nbuild_id={identity}\nsha256={sha(elf)}")
 
