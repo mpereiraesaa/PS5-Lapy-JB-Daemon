@@ -51,7 +51,7 @@ PS5_PAYLOAD_SDK=/path/to/ps5-payload-sdk make owned-one-shot
 ```
 
 The resident ELF is
-`build/owned_root_daemon-service/lapy_owned_root_daemon.elf`. The
+`build/owned_root_daemon-service/lapy-root-daemon.elf`. The
 one-request build defaults to `PPSA99994`; the build script also accepts
 `--title PPSA12345`, or `--title '*'` with `--service`. For a finite lab run,
 pass `--service --max-requests N`; add `--require-client-result` only when the

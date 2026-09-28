@@ -70,7 +70,7 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     (output / "owned_identity.h").write_text(
         '#define LAPY_OWNED_ID "' + identity + '"\n')
-    elf = output / "lapy_owned_root_daemon.elf"
+    elf = output / "lapy-root-daemon.elf"
     elf.unlink(missing_ok=True)
     command = [str(sdk / "bin/prospero-clang"), *flags, "-I" + str(logging),
                "-I" + str(output), "-I" + str(ROOT / "source"),
