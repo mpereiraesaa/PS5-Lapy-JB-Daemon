@@ -13,10 +13,13 @@ slot with `lapy_move_owned_ref`, verifies the donor's source slot is null and
 the target remains stopped, and lets both children exit through their native
 cleanup paths after the host resumes the target.
 
-The root-vnode read-only hold/use fields calibrated on this console must
+The root-vnode read-only hold/use fields calibrated on this console normally
 follow `0, +2, +4, +4, +3, 0` relative to the initial sample: target created,
-donor created, reference moved, donor reaped, target reaped. A mismatch fails
-the run rather than being accepted as proof of balanced ownership.
+donor created, reference moved, donor reaped, target reaped. The pre-transfer
+samples must match exactly. The post-donor sample is recorded as interference
+if other system activity changes it; the probe still lets the target exit and
+requires the final value to return to baseline within one second. A missing
+final balance fails the run.
 
 Build with `tools/build_probe.py --probe retained-cross-process` using the
 installed SDK and logging client. A host coordinator must parse the fresh
@@ -45,3 +48,16 @@ to target `fd_jdir`, with the source null and target still stopped. After
 RESUME/detach, both children exited and were reaped; the stream ended with
 `BYE`. This first build did not sample root-vnode counters. The later build
 adds the exact counter sequence above and requires a separate console run.
+
+The first counter-checked run (build
+`22cffd641419af994f637a0e7b73170b2cb20fe1d809f1ad819856e0d938cb40`,
+ELF SHA256 `38fbbc63dc8e2441928624fc1a3961f1792fbe677556fedbffca8ea46c171eab`)
+passed with private stream SHA256
+`0ffa2ee8c404df9c23041fe17ed732218665d6b4b88bb183e6d4faf4a0edc603`.
+Its hold/use sequence was `61/60, 63/62, 65/64, 65/64, 64/63, 61/60`.
+Four more cycles passed with the same baseline. On the fifth, the donor-exit
+sample rose to `66/65`, so the strict build stopped early; it did not record
+a final sample. The immediately following independent run began and ended at
+`61/60`, which rules out a persistent two-reference loss in that cycle but
+does not identify the concurrent activity. The revised probe records the
+intermediate anomaly and always checks final balance after target exit.

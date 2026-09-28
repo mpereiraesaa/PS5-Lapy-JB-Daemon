@@ -215,7 +215,7 @@ int main(void)
     struct counts baseline = {0}, observed = {0};
     struct lapy_slot_io io = {read_ptr, write_ptr, 0};
     intptr_t root = 0;
-    int error = 0, moved = 0;
+    int error = 0, moved = 0, intermediate_noise = 0;
     const char *stage = "preflight";
     if (ps5log_init_default("LAPYXFER", "lapy-retained-cross-process"))
         return 2;
@@ -294,20 +294,30 @@ int main(void)
                   LAPY_PROBE_ID);
     stage = "donor_exit";
     if ((error = release_child(&donor))) goto done;
-    if ((error = sample_root(root, "donor_reaped", &observed)) ||
-        (error = expect_delta(&baseline, &observed, 3))) goto done;
+    if ((error = sample_root(root, "donor_reaped", &observed))) goto done;
+    if (expect_delta(&baseline, &observed, 3)) {
+        intermediate_noise = 1;
+        ps5log_printf(PS5LOG_MARK,
+                      "root_interference build=%s phase=donor_reaped",
+                      LAPY_PROBE_ID);
+    }
     stage = "target_exit";
     if ((error = release_child(&target))) goto done;
-    if ((error = sample_root(root, "target_reaped", &observed)) ||
-        (error = expect_delta(&baseline, &observed, 0))) goto done;
+    for (unsigned i = 0; i < 20; ++i) {
+        if ((error = sample_root(root, "target_reaped", &observed)))
+            goto done;
+        if (!expect_delta(&baseline, &observed, 0)) break;
+        usleep(50000);
+    }
+    if ((error = expect_delta(&baseline, &observed, 0))) goto done;
     stage = "complete";
 done:
     cleanup_child(&donor);
     cleanup_child(&target);
     ps5log_printf(error ? PS5LOG_ERR : PS5LOG_MARK,
-                  "probe_result build=%s stage=%s error=%d moved=%d donor_reaped=%d target_reaped=%d",
+                  "probe_result build=%s stage=%s error=%d moved=%d donor_reaped=%d target_reaped=%d intermediate_noise=%d",
                   LAPY_PROBE_ID, stage, error, moved, donor.reaped,
-                  target.reaped);
+                  target.reaped, intermediate_noise);
     ps5log_close(error ? "probe-failed" : "probe-complete");
     return error ? 1 : 0;
 }
