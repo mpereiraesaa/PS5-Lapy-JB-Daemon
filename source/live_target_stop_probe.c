@@ -16,7 +16,10 @@
 #include <unistd.h>
 
 #define SANDBOX_BASE "/mnt/sandbox"
-#define TITLE_PREFIX "PPSA99995_"
+#ifndef LAPY_TARGET_TITLE
+#define LAPY_TARGET_TITLE "PPSA99995"
+#endif
+#define TITLE_PREFIX LAPY_TARGET_TITLE "_"
 #define REQUEST_SUFFIX "/download0/etahen_jailbreak"
 #define MAX_POLLS 600u
 #define POLL_US 100000u
@@ -131,8 +134,8 @@ int main(void)
 
     if (ps5log_init_default("LAPYTS", "lapy-live-target-stop-probe")) return 2;
     ps5log_printf(PS5LOG_MARK,
-                  "probe_start build=%s firmware=%08x mode=live-title-stop-read-only max_polls=%u",
-                  LAPY_PROBE_ID, kernel_get_fw_version(), MAX_POLLS);
+                  "probe_start build=%s firmware=%08x mode=live-title-stop-read-only title=%s max_polls=%u",
+                  LAPY_PROBE_ID, kernel_get_fw_version(), LAPY_TARGET_TITLE, MAX_POLLS);
     if (kernel_get_fw_version() != 0x12020000 ||
         KERNEL_OFFSET_PROC_P_PID != PROC_PID_OFFSET) {
         error = ENOTSUP; goto done;
