@@ -25,6 +25,8 @@ def main():
                         help="live process PID to observe; required only for target-dirs")
     parser.add_argument("--target-title",
                         help="PPSA title to observe; valid only for live-target-stop")
+    parser.add_argument("--observe-state", action="store_true",
+                        help="read stopped title root/jail/cwd and credential state; live-target-stop only")
     parser.add_argument("--sony-privileges", action="store_true",
                         help="temporarily change Sony fields after native credential replacement, cross-root probe only")
     parser.add_argument("--root-identity", action="store_true",
@@ -48,6 +50,8 @@ def main():
     if args.target_title is not None:
         if args.probe != "live-target-stop" or not re.fullmatch(r"PPSA[0-9]{5}", args.target_title):
             parser.error("--target-title requires --probe live-target-stop and a PPSA title ID")
+    if args.observe_state and args.probe != "live-target-stop":
+        parser.error("--observe-state requires --probe live-target-stop")
     sdk = Path(args.sdk).resolve()
     logging = args.logging_client.resolve()
     names = {"transport": ("native_probe.c", "native_directory.c", "native_directory.h"),
@@ -111,6 +115,8 @@ def main():
         flags.append(f"-DLAPY_TARGET_PID={args.target_pid}")
     if args.target_title is not None:
         flags.append(f'-DLAPY_TARGET_TITLE="{args.target_title}"')
+    if args.observe_state:
+        flags.append("-DLAPY_OBSERVE_STATE=1")
     identity = hashlib.sha256(json.dumps({"inputs": inputs, "sdk": sdk_inputs,
                                          "flags": flags}, sort_keys=True).encode()).hexdigest()
     stem = {"transport": "native", "credentials": "credential", "vfs": "vfs",
@@ -137,6 +143,7 @@ def main():
             "preentry-log": "preentry_log"}[args.probe]
     output = ROOT / ("build/probe" if args.probe == "transport" else
                      f"build/{stem}-probe/pid-{args.target_pid}" if args.probe == "target-dirs" else
+                     f"build/{stem}-probe/{args.target_title}/state" if args.probe == "live-target-stop" and args.target_title and args.observe_state else
                      f"build/{stem}-probe/{args.target_title}" if args.probe == "live-target-stop" and args.target_title else
                      f"build/{stem}-probe")
     output.mkdir(parents=True, exist_ok=True)
@@ -203,6 +210,7 @@ def main():
                                                if args.probe == "transport" else None,
                                    "target_pid": args.target_pid if args.probe == "target-dirs" else None,
                                    "target_title": args.target_title if args.probe == "live-target-stop" else None,
+                                   "observe_state": args.observe_state if args.probe == "live-target-stop" else None,
                                    "console_validated": False}, indent=2, sort_keys=True) + "\n")
     print(f"Built {elf.relative_to(ROOT)}\nbuild_id={identity}\nsha256={sha(elf)}")
 

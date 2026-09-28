@@ -30,12 +30,27 @@
 #define THREAD_PROC 0x08u
 #define THREAD_NEXT 0x10u
 #define FD_REFCNT 0x34u
+#ifndef LAPY_OBSERVE_STATE
+#define LAPY_OBSERVE_STATE 0
+#endif
+#if LAPY_OBSERVE_STATE
+#define FD_CDIR 0x08u
+#define SYSTEM_AUTHID UINT64_C(0x4801000000000013)
+extern intptr_t kernel_get_ucred_prison(pid_t pid);
+#endif
 
 struct target_snapshot {
     intptr_t proc, filedesc;
     intptr_t threads[MAX_THREADS];
     unsigned count, suspended;
     uint32_t fd_refs;
+#if LAPY_OBSERVE_STATE
+    intptr_t root, jail, cwd, credential, prison;
+    uid_t uid, ruid, svuid;
+    gid_t rgid;
+    uint64_t authid, attrs;
+    uint8_t caps[16];
+#endif
 };
 
 static pid_t parse_request_pid(const char *message)
@@ -99,6 +114,24 @@ static int read_target(pid_t pid, struct target_snapshot *out)
                        sizeof(out->suspended)) ||
         kernel_copyout(out->proc + PROC_THREADS_HEAD, &current,
                        sizeof(current))) return EFAULT;
+#if LAPY_OBSERVE_STATE
+    out->credential = kernel_get_proc_ucred(pid);
+    out->prison = kernel_get_ucred_prison(pid);
+    if (!out->credential || !out->prison ||
+        kernel_copyout(out->filedesc + KERNEL_OFFSET_FILEDESC_FD_RDIR,
+                       &out->root, sizeof(out->root)) ||
+        kernel_copyout(out->filedesc + KERNEL_OFFSET_FILEDESC_FD_JDIR,
+                       &out->jail, sizeof(out->jail)) ||
+        kernel_copyout(out->filedesc + FD_CDIR,
+                       &out->cwd, sizeof(out->cwd))) return EFAULT;
+    out->uid = kernel_get_ucred_uid(pid);
+    out->ruid = kernel_get_ucred_ruid(pid);
+    out->svuid = kernel_get_ucred_svuid(pid);
+    out->rgid = kernel_get_ucred_rgid(pid);
+    out->authid = kernel_get_ucred_authid(pid);
+    out->attrs = kernel_get_ucred_attrs(pid);
+    if (kernel_get_ucred_caps(pid, out->caps)) return EFAULT;
+#endif
     while (current) {
         if (out->count >= MAX_THREADS) return EOVERFLOW;
         for (unsigned i = 0; i < out->count; ++i)
@@ -115,10 +148,20 @@ static int read_target(pid_t pid, struct target_snapshot *out)
 static int same_members(const struct target_snapshot *a,
                         const struct target_snapshot *b)
 {
-    return a->proc == b->proc && a->filedesc == b->filedesc &&
+    int equal = a->proc == b->proc && a->filedesc == b->filedesc &&
            a->count == b->count && a->fd_refs == b->fd_refs &&
            !memcmp(a->threads, b->threads,
                    a->count * sizeof(a->threads[0]));
+#if LAPY_OBSERVE_STATE
+    equal = equal && a->root == b->root && a->jail == b->jail &&
+            a->cwd == b->cwd && a->credential == b->credential &&
+            a->prison == b->prison && a->uid == b->uid &&
+            a->ruid == b->ruid && a->svuid == b->svuid &&
+            a->rgid == b->rgid && a->authid == b->authid &&
+            a->attrs == b->attrs &&
+            !memcmp(a->caps, b->caps, sizeof(a->caps));
+#endif
+    return equal;
 }
 
 int main(void)
@@ -130,16 +173,31 @@ int main(void)
     unsigned polls = 0, stop_polls = 0, threads = 0, suspended = 0;
     int error = 0, stop_sent = 0, resume_sent = 0, acknowledged = 0;
     int private_fd = 0, stable_stop = 0;
+#if LAPY_OBSERVE_STATE
+    intptr_t system_root = 0;
+#endif
     const char *stage = "preflight";
 
     if (ps5log_init_default("LAPYTS", "lapy-live-target-stop-probe")) return 2;
     ps5log_printf(PS5LOG_MARK,
-                  "probe_start build=%s firmware=%08x mode=live-title-stop-read-only title=%s max_polls=%u",
-                  LAPY_PROBE_ID, kernel_get_fw_version(), LAPY_TARGET_TITLE, MAX_POLLS);
+                  "probe_start build=%s firmware=%08x mode=live-title-stop-read-only title=%s observe_state=%d max_polls=%u",
+                  LAPY_PROBE_ID, kernel_get_fw_version(), LAPY_TARGET_TITLE,
+                  LAPY_OBSERVE_STATE, MAX_POLLS);
     if (kernel_get_fw_version() != 0x12020000 ||
         KERNEL_OFFSET_PROC_P_PID != PROC_PID_OFFSET) {
         error = ENOTSUP; goto done;
     }
+#if LAPY_OBSERVE_STATE
+    system_root = KERNEL_ADDRESS_ROOTVNODE ? kernel_get_root_vnode() : 0;
+    if (!system_root) {
+        intptr_t init_fd = kernel_get_proc_filedesc(1);
+        if (!init_fd ||
+            kernel_copyout(init_fd + KERNEL_OFFSET_FILEDESC_FD_RDIR,
+                           &system_root, sizeof(system_root)) || !system_root) {
+            error = ENOTSUP; goto done;
+        }
+    }
+#endif
     stage = "find_request";
     for (; polls < MAX_POLLS; ++polls) {
         int found = find_request(path, &pid, started);
@@ -176,6 +234,24 @@ int main(void)
     suspended = stopped_b.suspended;
     private_fd = stopped_b.fd_refs == 1;
     if (!stable_stop || !private_fd) { error = EBUSY; goto done; }
+#if LAPY_OBSERVE_STATE
+    int caps_full = 1;
+    for (unsigned i = 0; i < sizeof(stopped_b.caps); ++i)
+        if (stopped_b.caps[i] != 0xff) caps_full = 0;
+    ps5log_printf(PS5LOG_MARK,
+                  "target_state build=%s title=%s root_null=%d root_system=%d jail_null=%d jail_system=%d cwd_null=%d cwd_system=%d root_jail_same=%d cwd_root_same=%d uid_root=%d ruid_root=%d svuid_root=%d rgid_root=%d prison0=%d system_authid=%d full_caps=%d attrs80=%d credential_stable=1",
+                  LAPY_PROBE_ID, LAPY_TARGET_TITLE,
+                  stopped_b.root == 0, stopped_b.root == system_root,
+                  stopped_b.jail == 0, stopped_b.jail == system_root,
+                  stopped_b.cwd == 0, stopped_b.cwd == system_root,
+                  stopped_b.root == stopped_b.jail,
+                  stopped_b.cwd == stopped_b.root,
+                  stopped_b.uid == 0, stopped_b.ruid == 0,
+                  stopped_b.svuid == 0, stopped_b.rgid == 0,
+                  stopped_b.prison == KERNEL_ADDRESS_PRISON0,
+                  stopped_b.authid == SYSTEM_AUTHID, caps_full,
+                  !!(stopped_b.attrs & 0x80));
+#endif
     stage = "complete";
 done:
     if (stop_sent) {
