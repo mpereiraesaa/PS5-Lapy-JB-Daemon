@@ -103,10 +103,12 @@ int main(void)
     int ready[2] = {-1, -1}, go[2] = {-1, -1};
     intptr_t proc_before = 0, proc_stopped = 0, proc_after = 0;
     uint64_t tick_before = 0, tick_a = 0, tick_b = 0, tick_after = 0;
-    unsigned threads = 0, stopped_threads = 0, candidates = 0;
+    unsigned threads = 2, reported_threads = 0, stopped_threads = 0;
+    unsigned candidates = 0;
     unsigned candidate[4] = {0, 0, 0, 0};
     pid_t child = -1;
     int error = 0, status = 0, reaped = 0, sent_stop = 0, sent_cont = 0;
+    int kinfo_error = 0;
     const char *stage = "setup";
 
     if (ps5log_init_default("LAPYSTOP", "lapy-signal-quiescence-probe"))
@@ -144,9 +146,13 @@ int main(void)
         error = EPROTO; goto done;
     }
     stage = "stopped_snapshot";
-    if ((error = snapshot(child, &proc_stopped, stopped)) ||
-        (error = thread_states(child, &threads, &stopped_threads))) goto done;
-    if (threads < 2 || stopped_threads != threads ||
+    if ((error = snapshot(child, &proc_stopped, stopped))) goto done;
+    kinfo_error = thread_states(child, &reported_threads, &stopped_threads);
+    if (kinfo_error && kinfo_error != ENOENT && kinfo_error != ENOTSUP) {
+        error = kinfo_error; goto done;
+    }
+    if ((!kinfo_error &&
+         (reported_threads != threads || stopped_threads != threads)) ||
         proc_before != proc_stopped) { error = EPROTO; goto done; }
     tick_a = atomic_load_explicit(ticks, memory_order_relaxed);
     usleep(OBSERVE_US);
@@ -190,8 +196,9 @@ done:
     if (go[1] >= 0) close(go[1]);
     if (ticks && ticks != MAP_FAILED) munmap((void *)ticks, sizeof(*ticks));
     ps5log_printf(error ? PS5LOG_ERR : PS5LOG_MARK,
-                  "probe_result build=%s stage=%s error=%d threads=%u stopped_threads=%u tick_before=%llu tick_stopped_a=%llu tick_stopped_b=%llu tick_resumed=%llu proc_stable=%d candidates=%u offset0=0x%x offset1=0x%x offset2=0x%x offset3=0x%x stop_sent=%d cont_sent=%d reaped=%d",
-                  LAPY_PROBE_ID, stage, error, threads, stopped_threads,
+                  "probe_result build=%s stage=%s error=%d expected_threads=%u reported_threads=%u stopped_threads=%u kinfo_error=%d tick_before=%llu tick_stopped_a=%llu tick_stopped_b=%llu tick_resumed=%llu proc_stable=%d candidates=%u offset0=0x%x offset1=0x%x offset2=0x%x offset3=0x%x stop_sent=%d cont_sent=%d reaped=%d",
+                  LAPY_PROBE_ID, stage, error, threads, reported_threads,
+                  stopped_threads, kinfo_error,
                   (unsigned long long)tick_before,
                   (unsigned long long)tick_a,
                   (unsigned long long)tick_b,

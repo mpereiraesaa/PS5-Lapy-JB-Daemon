@@ -71,6 +71,16 @@ static int sample(intptr_t root, intptr_t data, const char *phase,
     return 0;
 }
 
+static int root_matches(intptr_t root, const struct counts *baseline,
+                        uint32_t delta)
+{
+    uint32_t hold = 0, use = 0;
+    if (kernel_copyout(root + HINT_HOLD, &hold, sizeof(hold)) ||
+        kernel_copyout(root + HINT_USE, &use, sizeof(use))) return EFAULT;
+    return hold == baseline->root_hold + delta &&
+           use == baseline->root_use + delta ? 0 : EAGAIN;
+}
+
 static void child_main(struct donor *self, int chdir_data)
 {
     char go = 0;
@@ -189,13 +199,17 @@ int main(void)
         target_refs != 1) { error = EPROTO; goto done; }
     stage = "baseline";
     if ((error = sample(root, 0, "baseline", &baseline))) goto done;
+    usleep(SETTLE_US);
+    if ((error = root_matches(root, &baseline, 0))) goto done;
     stage = "donors";
     if ((error = start_donor(&data_source, root, 1))) goto done;
     data = data_source.cdir;
     if ((error = sample(root, data, "data_acquired", &acquired)) ||
+        (error = root_matches(root, &baseline, 1)) ||
         (error = start_donor(&old_receiver, root, 0)) ||
         (error = start_donor(&root_source, root, 0)) ||
-        (error = start_donor(&data_receiver, root, 0))) goto done;
+        (error = start_donor(&data_receiver, root, 0)) ||
+        (error = root_matches(root, &baseline, 7))) goto done;
     stage = "move_to_data";
     first = lapy_replace_owned_ref(
         &io, data_source.filedesc + CANDIDATE_CDIR,
