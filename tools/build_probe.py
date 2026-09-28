@@ -29,6 +29,8 @@ def main():
                         help="read stopped title root/jail/cwd and credential state; live-target-stop only")
     parser.add_argument("--self-stop", action="store_true",
                         help="locally SIGSTOP disposable target; retained-nonroot only")
+    parser.add_argument("--scan-gadget", action="store_true",
+                        help="read-only scan near retained title RIP; live-target-ptrace only")
     parser.add_argument("--sony-privileges", action="store_true",
                         help="temporarily change Sony fields after native credential replacement, cross-root probe only")
     parser.add_argument("--root-identity", action="store_true",
@@ -56,6 +58,8 @@ def main():
         parser.error("--observe-state requires --probe live-target-stop")
     if args.self_stop and args.probe != "retained-nonroot":
         parser.error("--self-stop requires --probe retained-nonroot")
+    if args.scan_gadget and args.probe != "live-target-ptrace":
+        parser.error("--scan-gadget requires --probe live-target-ptrace")
     sdk = Path(args.sdk).resolve()
     logging = args.logging_client.resolve()
     names = {"transport": ("native_probe.c", "native_directory.c", "native_directory.h"),
@@ -124,6 +128,8 @@ def main():
         flags.append("-DLAPY_OBSERVE_STATE=1")
     if args.self_stop:
         flags.append("-DLAPY_SELF_STOP=1")
+    if args.scan_gadget:
+        flags.append("-DLAPY_SCAN_GADGET=1")
     identity = hashlib.sha256(json.dumps({"inputs": inputs, "sdk": sdk_inputs,
                                          "flags": flags}, sort_keys=True).encode()).hexdigest()
     stem = {"transport": "native", "credentials": "credential", "vfs": "vfs",
@@ -153,6 +159,7 @@ def main():
                      f"build/{stem}-probe/pid-{args.target_pid}" if args.probe == "target-dirs" else
                      f"build/{stem}-probe/{args.target_title}/state" if args.probe == "live-target-stop" and args.target_title and args.observe_state else
                      f"build/{stem}-probe/{args.target_title}" if args.probe == "live-target-stop" and args.target_title else
+                     f"build/{stem}-probe/{args.target_title}/scan" if args.probe == "live-target-ptrace" and args.target_title and args.scan_gadget else
                      f"build/{stem}-probe/{args.target_title}" if args.probe == "live-target-ptrace" and args.target_title else
                      f"build/{stem}-probe/self-stop" if args.probe == "retained-nonroot" and args.self_stop else
                      f"build/{stem}-probe")
@@ -223,6 +230,7 @@ def main():
                                    "target_title": args.target_title if args.probe in ("live-target-stop", "live-target-ptrace") else None,
                                    "observe_state": args.observe_state if args.probe == "live-target-stop" else None,
                                    "self_stop": args.self_stop if args.probe == "retained-nonroot" else None,
+                                   "scan_gadget": args.scan_gadget if args.probe == "live-target-ptrace" else None,
                                    "console_validated": False}, indent=2, sort_keys=True) + "\n")
     print(f"Built {elf.relative_to(ROOT)}\nbuild_id={identity}\nsha256={sha(elf)}")
 
