@@ -4,6 +4,7 @@
 #define PS5LOG_IMPLEMENTATION
 #include "ps5log.h"
 #include "probe_identity.h"
+#include "filedesc_refcount.h"
 #include <errno.h>
 #include <ps5/kernel.h>
 #include <signal.h>
@@ -23,36 +24,6 @@ static int snapshot(intptr_t *filedesc, uint8_t bytes[SNAPSHOT_BYTES])
     if (!*filedesc) return ENOENT;
     if (kernel_copyout(*filedesc, bytes, SNAPSHOT_BYTES)) return EFAULT;
     return 0;
-}
-
-static uint32_t field(const uint8_t bytes[SNAPSHOT_BYTES],
-                      unsigned offset, unsigned width)
-{
-    uint32_t value = 0;
-    memcpy(&value, bytes + offset, width);
-    return value;
-}
-
-static unsigned candidates(const uint8_t before[SNAPSHOT_BYTES],
-                           const uint8_t shared[SNAPSHOT_BYTES],
-                           unsigned *found_offset, unsigned *found_width)
-{
-    unsigned count = 0;
-    for (unsigned offset = 0; offset + 2 <= SNAPSHOT_BYTES; offset += 2) {
-        unsigned width = 0;
-        if (offset % 4 == 0 && offset + 4 <= SNAPSHOT_BYTES &&
-            field(before, offset, 4) == 1 && field(shared, offset, 4) == 2)
-            width = 4;
-        else if (field(before, offset, 2) == 1 &&
-                 field(shared, offset, 2) == 2)
-            width = 2;
-        if (width) {
-            *found_offset = offset;
-            *found_width = width;
-            ++count;
-        }
-    }
-    return count;
 }
 
 int main(void)
@@ -96,12 +67,6 @@ int main(void)
     error = snapshot(&shared, shared_bytes);
     if (error) goto done;
     if (shared != before) { error = EPROTO; goto done; }
-    candidate_count = candidates(initial_bytes, shared_bytes,
-                                 &ref_offset, &ref_width);
-    if (candidate_count != 1) { error = EPROTO; goto done; }
-    initial_refs = (int)field(initial_bytes, ref_offset, ref_width);
-    shared_refs = (int)field(shared_bytes, ref_offset, ref_width);
-
     stage = "native_unshare";
     if (rfork(RFFDG) < 0) { error = errno ? errno : EIO; goto done; }
     stage = "private_snapshot";
@@ -111,8 +76,28 @@ int main(void)
         error = EFAULT;
         goto done;
     }
-    private_refs = (int)field(private_bytes, ref_offset, ref_width);
-    old_refs = (int)field(old_bytes, ref_offset, ref_width);
+    stage = "calibrate_refcount";
+    error = lapy_calibrate_filedesc_refcount(initial_bytes, shared_bytes,
+                                             old_bytes, SNAPSHOT_BYTES,
+                                             &ref_offset, &ref_width);
+    if (error) goto done;
+    candidate_count = 1;
+    uint32_t initial_value = 0, shared_value = 0;
+    uint32_t private_value = 0, old_value = 0;
+    if (lapy_read_filedesc_refcount(initial_bytes, SNAPSHOT_BYTES,
+                                   ref_offset, ref_width, &initial_value) ||
+        lapy_read_filedesc_refcount(shared_bytes, SNAPSHOT_BYTES,
+                                   ref_offset, ref_width, &shared_value) ||
+        lapy_read_filedesc_refcount(private_bytes, SNAPSHOT_BYTES,
+                                   ref_offset, ref_width, &private_value) ||
+        lapy_read_filedesc_refcount(old_bytes, SNAPSHOT_BYTES,
+                                   ref_offset, ref_width, &old_value)) {
+        error = EPROTO; goto done;
+    }
+    initial_refs = (int)initial_value;
+    shared_refs = (int)shared_value;
+    private_refs = (int)private_value;
+    old_refs = (int)old_value;
     unshared = private_fd != shared && private_refs == 1 && old_refs == 1;
     if (!unshared) error = EPROTO;
 
