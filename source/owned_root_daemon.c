@@ -1,6 +1,6 @@
-/* FW 12.02 cooperative daemon: native root ownership and guarded elevation.
+/* Cooperative daemon: native root ownership and guarded elevation.
  * A HELD state deliberately retains every process whose directory ownership
- * may be ambiguous. This is not the multi-firmware production backend. */
+ * may be ambiguous. Only FW 12.02 has completed console validation. */
 #define PS5LOG_IMPLEMENTATION
 #include "ps5log.h"
 #include "owned_identity.h"
@@ -356,6 +356,60 @@ static void cleanup_child(struct child *self)
     if (self->release[1] >= 0) close(self->release[1]);
 }
 
+/* The SDK resolves rootvnode per firmware, but does not expose these vnode
+ * counter offsets. Check the assumed layout using a disposable native
+ * RFPROC|RFFDG child before any target credential or directory write. */
+static int validate_root_reference_layout(intptr_t root, intptr_t self_fd)
+{
+    struct child donor = {.pid = -1, .ready = {-1,-1},
+                          .release = {-1,-1}};
+    struct snapshot observed;
+    struct counts before = {0}, during = {0}, after = {0};
+    int error = sample_root(root, "layout_before", &before);
+    if (error) return error;
+    if (!before.hold || !before.use ||
+        before.hold > 1000000 || before.use > 1000000)
+        return EPROTO;
+    if ((error = start_child(&donor))) goto done;
+    if ((error = snapshot(donor.pid, &observed))) goto done;
+    if (observed.fd == self_fd || observed.fd_refs != 1 ||
+        observed.root != root || observed.jail || observed.cwd != root ||
+        observed.count != 1 || observed.suspended) {
+        error = EPROTO; goto done;
+    }
+    if ((error = sample_root(root, "layout_donor", &during))) goto done;
+    if (during.hold != before.hold + 2 ||
+        during.use != before.use + 2) {
+        error = EPROTO; goto done;
+    }
+    if ((error = release_child(&donor))) goto done;
+    if ((error = sample_root(root, "layout_released", &after))) goto done;
+    if (after.hold != before.hold || after.use != before.use)
+        error = EPROTO;
+done:
+    cleanup_child(&donor);
+    ps5log_printf(error ? PS5LOG_ERR : PS5LOG_MARK,
+                  "root_layout build=%s valid=%d error=%d",
+                  LAPY_OWNED_ID, error == 0, error);
+    return error;
+}
+
+static int validate_group_layout(intptr_t ucred)
+{
+    uint32_t stored = UINT32_MAX;
+    int native = getgroups(0, 0);
+    int error = native < 0 ? (errno ? errno : EIO) : 0;
+    if (!error && kernel_copyout(ucred + UCRED_NGROUPS,
+                                 &stored, sizeof(stored)))
+        error = EFAULT;
+    if (!error && stored != (uint32_t)native)
+        error = EPROTO;
+    ps5log_printf(error ? PS5LOG_ERR : PS5LOG_MARK,
+                  "group_layout build=%s valid=%d error=%d",
+                  LAPY_OWNED_ID, error == 0, error);
+    return error;
+}
+
 static int save_credentials(pid_t pid, intptr_t ucred,
                             struct credentials *out)
 {
@@ -630,7 +684,7 @@ int main(void)
                   LAPY_OWNED_ID, kernel_get_fw_version(), TARGET_TITLE,
                   LAPY_SERVICE, LAPY_REQUIRE_CLIENT_RESULT,
                   LAPY_MAX_REQUESTS);
-    if (kernel_get_fw_version() != 0x12020000 ||
+    if (!kernel_get_fw_version() ||
         KERNEL_OFFSET_PROC_P_PID != PROC_PID_OFFSET ||
         !KERNEL_ADDRESS_PRISON0 ||
         !KERNEL_OFFSET_FILEDESC_FD_RDIR ||
@@ -678,6 +732,9 @@ int main(void)
     ps5log_printf(PS5LOG_MARK,
                   "self_credential build=%s native_clone=1 refs=2",
                   LAPY_OWNED_ID);
+    stage = "group_layout";
+    if ((error = validate_group_layout(self.ucred)))
+        goto done;
     stage = "thread_credential_slot";
     if ((error = find_thread_credential_slot(&self,
                                              &thread_credential_offset)))
@@ -685,6 +742,9 @@ int main(void)
     ps5log_printf(PS5LOG_MARK,
                   "thread_credential_slot build=%s offset=%zu",
                   LAPY_OWNED_ID, thread_credential_offset);
+    stage = "root_layout";
+    if ((error = validate_root_reference_layout(root, self.fd)))
+        goto done;
 #if LAPY_SERVICE
     for (unsigned completed = 0;;) {
         path[0] = 0;

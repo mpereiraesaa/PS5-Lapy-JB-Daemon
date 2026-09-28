@@ -1,6 +1,6 @@
 # Owned-root Lapy daemon
 
-The corrected backend is `source/owned_root_daemon.c`. On firmware 12.02 it
+The corrected backend is `source/owned_root_daemon.c`. On tested firmware 12.02 it
 replaces the legacy direct root-pointer overwrite with a transfer of **two
 native vnode references**. Two disposable `rfork(RFPROC|RFFDG)` children each
 inherit a system-root reference. While the requested title is stopped, Lapy
@@ -35,10 +35,13 @@ before it starts more threads. It must check the return value.
 
 The resident service scans `PPSA*` sandbox requests and handles successive
 titles without restarting. A bounded one-request mode remains available for
-controlled tests. Both variants reject unsupported firmware at startup; the
-kernel structure checks and root use/hold counter offsets have been calibrated
-on **FW 12.02 only**. This is not yet a multi-firmware release. It does not
-silently fall back to `Hijacker::jailbreak(true)`.
+controlled tests. The SDK resolves its kernel addresses by firmware; the
+daemon also checks its assumed process layout, compares the raw `cr_ngroups`
+field with native `getgroups`, and validates the vnode counter offsets through
+a disposable native `rfork` child before changing a target.
+It fails closed if those checks fail. The layout and lifecycle have been
+validated on **FW 12.02 only**; other SDK-supported firmware is experimental.
+It does not silently fall back to `Hijacker::jailbreak(true)`.
 
 Build with the installed SDK and the lab's `ps5log/1` client:
 
@@ -48,7 +51,7 @@ PS5_PAYLOAD_SDK=/path/to/ps5-payload-sdk make owned-one-shot
 ```
 
 The resident ELF is
-`build/owned_root_daemon-fw1202-service/lapy_owned_root_daemon.elf`. The
+`build/owned_root_daemon-service/lapy_owned_root_daemon.elf`. The
 one-request build defaults to `PPSA99994`; the build script also accepts
 `--title PPSA12345`, or `--title '*'` with `--service`. For a finite lab run,
 pass `--service --max-requests N`; add `--require-client-result` only when the
@@ -80,6 +83,19 @@ observed. That test ELF SHA-256 was
 `df542cb97fcd0a4f905c133c344fddd5f9fb5f01f5554e4bd5eee04c56abf055`.
 The unbounded release ELF is a separate build of the same source and is not
 claimed to have completed an unlimited-duration hardware run.
+With the SDK-supported firmware gate and the new preflight layout check, a
+bounded resident build completed another FW 12.02 request. The disposable
+child changed root hold/use from `69/68` to `71/70`, and native exit returned
+them to `69/68` before the target was touched. The request then completed
+with `/data` read/write confirmed and a clean `ps5log/1` BYE. The tested ELF
+SHA-256 was
+`134ada7f2b4a059f943a19a40fd66e07bb7ccd0fbca17928142efc5831e2c188`.
+With the final group-field guard, native `getgroups` matched the stored field;
+the root layout check and a further `/data` read/write request also passed.
+That bounded ELF SHA-256 was
+`dc5b0aee1102d7f7aab6ccee65992dfdcb2144293b5eebb65829ba880ad8a554`.
+No other firmware was available for this test; passing the runtime preflight
+there must not be presented as completed console validation.
 The temporary test title was restored to its original `eboot.bin` SHA-256
 `b62386902cef054114c1f3ae80bd5b665c175b0fb1a11c5b10e6d19d057fc5e3`.
 Private run logs and artifact hashes remain in the lab; they are not packaged
@@ -98,9 +114,9 @@ into this fork. Its test package needs `downloadDataSize > 0` and a private
 `dev.conf` for the logging endpoint. Back up any installed test title before
 deploying a rebuilt `eboot.bin`.
 
-The outstanding work for other firmware is to calibrate and validate its
-filedesc, thread, credential and vnode-counter layout before removing the
-12.02 gate. Other homebrews must adopt the cooperative `seteuid` call, or a
+The outstanding work for other firmware is an attended repeatability test of
+the runtime layout check, filedesc, thread, credential and vnode behavior.
+Other homebrews must adopt the cooperative `seteuid` call, or a
 future daemon must find a separately validated native target-clone method.
 The payload-side `PT_READ_I` and `PT_IO` attempts did not return usable target
 code bytes on this firmware, so they are not used for target cloning here.
