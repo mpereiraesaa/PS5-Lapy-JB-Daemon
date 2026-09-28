@@ -70,10 +70,19 @@ int main(void)
     error = snapshot(root, previous);
     if (error) goto done;
     ++sampled;
-    ps5log_printf(PS5LOG_MARK,
-                  "reference_hints build=%s sample=0 hold_offset=0x%x hold=%u use_offset=0x%x use=%u status=unverified-layout",
-                  LAPY_PROBE_ID, HINT_HOLD, previous[HINT_HOLD / 4],
-                  HINT_USE, previous[HINT_USE / 4]);
+    if (plausible(previous[HINT_HOLD / 4]) &&
+        plausible(previous[HINT_USE / 4])) {
+        ps5log_printf(PS5LOG_MARK,
+                      "reference_hints build=%s sample=0 hold_offset=0x%x hold=%u use_offset=0x%x use=%u status=plausible-unverified",
+                      LAPY_PROBE_ID, HINT_HOLD, previous[HINT_HOLD / 4],
+                      HINT_USE, previous[HINT_USE / 4]);
+    } else {
+        /* An SDK hint could land on a pointer field in Sony's vnode layout.
+         * Publish no value when its interpretation as a small count fails. */
+        ps5log_printf(PS5LOG_MARK,
+                      "reference_hints build=%s sample=0 hold_offset=0x%x use_offset=0x%x status=unavailable",
+                      LAPY_PROBE_ID, HINT_HOLD, HINT_USE);
+    }
 
     for (unsigned sample = 1; sample < SAMPLES; ++sample) {
         usleep(PERIOD_US);

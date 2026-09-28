@@ -42,7 +42,7 @@ def analyze(log_path: Path, server_manifest: Path, build_manifest: Path):
         raise ValueError("missing BYE")
     aggregates = defaultdict(lambda: {"events": 0, "net": 0, "negative": 0,
                                   "positive": 0})
-    first = result = None
+    first = hints = result = None
     last_seq = 0
     for line in lines[1:-1]:
         record = RECORD.fullmatch(line)
@@ -58,8 +58,28 @@ def analyze(log_path: Path, server_manifest: Path, build_manifest: Path):
             if first is not None or info.get("build") != build_id:
                 raise ValueError("unexpected probe start")
             first = info
+        elif msg.startswith("reference_hints "):
+            if not first or hints is not None or info.get("build") != build_id or \
+                    info.get("sample") != "0" or \
+                    info.get("hold_offset") != "0x1bc" or \
+                    info.get("use_offset") != "0x1c0":
+                raise ValueError("unexpected reference hints")
+            status = info.get("status")
+            if status == "plausible-unverified":
+                try:
+                    hold, use = int(info["hold"]), int(info["use"])
+                except (KeyError, ValueError) as exc:
+                    raise ValueError("malformed reference hints") from exc
+                if not 1 <= hold <= 4096 or not 1 <= use <= 4096:
+                    raise ValueError("reference hints outside small-count range")
+            elif status == "unavailable":
+                if "hold" in info or "use" in info:
+                    raise ValueError("unavailable hints expose field values")
+            else:
+                raise ValueError("unknown reference-hint status")
+            hints = info
         elif msg.startswith("candidate_change "):
-            if info.get("build") != build_id:
+            if hints is None or info.get("build") != build_id:
                 raise ValueError("candidate from another build")
             try:
                 offset = int(info["offset"], 16)
@@ -80,7 +100,7 @@ def analyze(log_path: Path, server_manifest: Path, build_manifest: Path):
             if result is not None or info.get("build") != build_id:
                 raise ValueError("unexpected probe result")
             result = info
-    if not first or not result or result.get("stage") != "complete" or \
+    if not first or not hints or not result or result.get("stage") != "complete" or \
             result.get("error") != "0" or result.get("sampled") != first.get("samples"):
         raise ValueError("probe did not complete the declared window")
     if int(result.get("changes", -1)) != sum(x["events"] for x in aggregates.values()):
@@ -96,6 +116,7 @@ def analyze(log_path: Path, server_manifest: Path, build_manifest: Path):
         "log_sha256": metadata["sha256"],
         "firmware": first.get("firmware"),
         "samples": int(result["sampled"]),
+        "hint_status": hints["status"],
         "candidates": [dict(offset=f"0x{offset:x}", **value)
                        for offset, value in sorted(aggregates.items())],
         "interpretation": "observations only; correlate with bounded escalation events",
