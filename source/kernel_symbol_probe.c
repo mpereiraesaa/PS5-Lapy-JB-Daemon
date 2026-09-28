@@ -10,6 +10,7 @@
 #include <sys/param.h>
 #include <sys/linker.h>
 #include <sys/syscall.h>
+#include <unistd.h>
 
 #if !defined(__x86_64__) || SYS_kldsym != 337
 #error "Requires the reviewed PS5 x86-64 kldsym syscall ABI"
@@ -46,8 +47,29 @@ static unsigned lookup_one(const char *symbol)
 int main(void)
 {
     unsigned found = 0;
+    intptr_t cred;
+    uint64_t authority = 0;
+    uint8_t caps[16] = {0};
+    int credential_readable = 0;
+    int caps_all_ff = 1;
     if (ps5log_init_default("LAPYSYM", "lapy-kernel-symbol-probe"))
         return 2;
+    cred = kernel_get_proc_ucred(getpid());
+    if (cred &&
+        !kernel_copyout(cred + KERNEL_OFFSET_UCRED_CR_SCEAUTHID,
+                        &authority, sizeof(authority)) &&
+        !kernel_copyout(cred + KERNEL_OFFSET_UCRED_CR_SCECAPS,
+                        caps, sizeof(caps))) {
+        credential_readable = 1;
+        for (size_t i = 0; i < sizeof(caps); ++i)
+            if (caps[i] != 0xff) caps_all_ff = 0;
+    }
+    ps5log_printf(PS5LOG_MARK,
+                  "caller_identity build=%s uid=%u euid=%u gid=%u egid=%u credential_readable=%d authority=%016llx caps_all_ff=%d",
+                  LAPY_PROBE_ID, (unsigned)getuid(), (unsigned)geteuid(),
+                  (unsigned)getgid(), (unsigned)getegid(),
+                  credential_readable, (unsigned long long)authority,
+                  credential_readable ? caps_all_ff : 0);
     ps5log_printf(PS5LOG_MARK,
                   "probe_start build=%s firmware=%08x count=%u mode=lookup-only",
                   LAPY_PROBE_ID, kernel_get_fw_version(), 9u);

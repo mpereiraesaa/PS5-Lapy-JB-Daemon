@@ -62,6 +62,16 @@ build used a static pointer table whose entries appeared null at runtime, so
 its nine `ENOSYS` results alone were ambiguous; the corrected build passes
 each name literal directly and logs it alongside the result.
 
+A follow-up ELF (`8fbf542ecb3c9417750d52a86ba74793c3d6833b22f0bad21c30d5cf56d0dc38`,
+SHA256 `0cf6a5ab422e23b71b01841168b6d49a1ee31e2029669a91778a4129061e2aa1`)
+also logged its caller identity before the same nine lookups. Under elfldr on
+12.02, the caller had real UID 1, effective UID 0, Sony auth ID
+`0x480000001000000e`, and capabilities that were **not** all `0xff`; every
+lookup still returned `ENOSYS` (78). Thus effective UID 0 does not expose
+`kldsym` in this loader context. This does not establish its behavior after a
+full Sony capability/auth-ID elevation, nor whether the named kernel routines
+exist internally. The private `ps5log/1` stream completed with a clean BYE.
+
 ## Native reference calibration without elevation
 
 `--probe root-native-refs` builds a separate disposable ELF. It reads its own
