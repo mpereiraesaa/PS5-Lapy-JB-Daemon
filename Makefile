@@ -28,6 +28,8 @@ check-native:
 	./build/host/test_root_references
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -g -fsanitize=address,undefined -Isource source/donor_transaction.c tests/test_donor_transaction.c -o build/host/test_donor_transaction
 	./build/host/test_donor_transaction
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -g -fsanitize=address,undefined -Isource source/filedesc_refcount.c tests/test_filedesc_refcount.c -o build/host/test_filedesc_refcount
+	./build/host/test_filedesc_refcount
 
 # Compile the transport component only; this is not an elevation payload.
 native-components:

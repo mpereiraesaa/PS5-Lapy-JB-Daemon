@@ -12,8 +12,11 @@ The builder writes an ignored ELF and identity manifest under
 `build/filedesc_unshare-probe/`. The probe records only `ps5log/1` evidence.
 It does not elevate credentials, write kernel memory, edit another process,
 or claim to repair Lapy. It scans only the first 128 bytes of its own
-`filedesc` for a unique aligned 16- or 32-bit field that changes 1→2 during
-sharing, avoiding a fixed SDK structure offset. Multiple matches fail closed.
+`filedesc` for a unique aligned 16- or 32-bit field that changes 1→2→1
+through native sharing and unsharing, avoiding a fixed SDK structure offset.
+Multiple matches fail closed. The calibrated field can gate a future target
+adapter only after that adapter separately verifies the target's live identity,
+stable `filedesc` address and exclusive ownership.
 
 On a clean boot, under the shared `console:PS5` lease, run this **once** as a
 standalone payload. It first requires its own `fd_refcnt` to be one. It creates
@@ -60,3 +63,14 @@ gaps; the identity-bound analyzer reported `supported: true`, a unique
 four-byte candidate at `0x34`, and the `1→2→separate 1/1` transition. This
 does not establish that Lapy can make the target process call `rfork(RFFDG)`
 or that its directory slots are safe to edit afterward.
+
+The reusable scanner now requires the same owned table's native `1→2→1`
+transition, including the count after the parent separates from the child.
+On the same owned firmware 12.02, build
+`e05c30903065517b4479a44cc1304f3f2ee014c978a43652a07d830cd4e682b6`
+(ELF SHA256 `0eb4e31dcb9c3fa3f33abe12c1d99ce3bd59caa77e639a37bde0722c718d01eb`)
+passed the artifact-bound analyzer with a unique four-byte field at `0x34`.
+The clean private stream SHA256 is
+`ceb8e3269e61754fe1cf4ae36aff9e01e3cc9ac8971697b5776d7d32fd559701`.
+This validates calibration on 12.02 only; other firmwares must pass the same
+native transition before their inferred field is used.
