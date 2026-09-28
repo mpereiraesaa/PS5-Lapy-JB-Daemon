@@ -19,7 +19,7 @@ def main():
     parser.add_argument("--logging-client", type=Path, required=True)
     parser.add_argument("--exclusive-receiver", action="store_true",
                         help="test explicit CLOEXEC setup in this non-execing probe only")
-    parser.add_argument("--probe", choices=("transport", "cross-process-directory", "credentials", "vfs", "cross-root", "sysent", "root-refs", "root-native-refs", "kernel-symbols", "filedesc-unshare", "target-dirs", "request-dirs", "donor-filedesc", "null-jail-transfer", "old-root-release", "ptrace-quiescence", "signal-quiescence", "thread-stop-calibration", "live-target-stop", "debug-retention", "move-only", "retained-cross-process"), default="transport")
+    parser.add_argument("--probe", choices=("transport", "cross-process-directory", "credentials", "vfs", "cross-root", "sysent", "root-refs", "root-native-refs", "kernel-symbols", "filedesc-unshare", "target-dirs", "request-dirs", "donor-filedesc", "null-jail-transfer", "old-root-release", "ptrace-quiescence", "signal-quiescence", "thread-stop-calibration", "live-target-stop", "debug-retention", "move-only", "retained-cross-process", "preentry-log"), default="transport")
     parser.add_argument("--target-pid", type=int,
                         help="live process PID to observe; required only for target-dirs")
     parser.add_argument("--sony-privileges", action="store_true",
@@ -69,13 +69,19 @@ def main():
                            "donor_transaction.h"),
              "retained-cross-process": ("retained_cross_process_probe.c",
                                         "donor_transaction.c",
-                                        "donor_transaction.h")}[args.probe]
+                                        "donor_transaction.h"),
+             "preentry-log": ("preentry_log_probe.c",)}[args.probe]
     files = [ROOT / "source" / name for name in names]
     inputs = {str(p.relative_to(ROOT)): sha(p) for p in files}
     inputs["external/ps5log.h"] = sha(logging / "ps5log.h")
     inputs["tools/build_probe.py"] = sha(Path(__file__).resolve())
     sdk_inputs = {str(p.relative_to(sdk)): sha(p)
                   for p in sorted((sdk / "target").rglob("*")) if p.is_file()}
+    log_stub_source = sdk.parent / "sce_stubs/libkernel_sys.c"
+    if args.probe == "preentry-log":
+        if not log_stub_source.is_file():
+            raise FileNotFoundError(log_stub_source)
+        sdk_inputs["sdk-source/sce_stubs/libkernel_sys.c"] = sha(log_stub_source)
     flags = ["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror"]
     if args.probe in ("ptrace-quiescence", "signal-quiescence", "thread-stop-calibration", "debug-retention", "retained-cross-process"):
         flags.append("-pthread")
@@ -107,7 +113,8 @@ def main():
             "live-target-stop": "live_target_stop",
             "debug-retention": "debug_retention",
             "move-only": "move_only",
-            "retained-cross-process": "retained_cross_process"}[args.probe]
+            "retained-cross-process": "retained_cross_process",
+            "preentry-log": "preentry_log"}[args.probe]
     output = ROOT / ("build/probe" if args.probe == "transport" else
                      f"build/{stem}-probe/pid-{args.target_pid}" if args.probe == "target-dirs" else
                      f"build/{stem}-probe")
@@ -118,9 +125,24 @@ def main():
     manifest = output / "manifest.json"
     elf.unlink(missing_ok=True)
     manifest.unlink(missing_ok=True)
+    extra_link = []
+    if args.probe == "preentry-log":
+        nid_source = output / "log_buffer_nid.c"
+        nid_source.write_text(
+            'asm(".global \\"C49jelxiaVE\\"\\n"\n'
+            '    ".type \\"C49jelxiaVE\\" @function\\n"\n'
+            '    "\\"C49jelxiaVE\\":\\n");\n')
+        stub_so = output / "libkernel_sys_log_ext.so"
+        stub_command = [str(sdk / "bin/prospero-clang"), "-shared",
+                        "-Wl,-soname=libkernel_sys.sprx",
+                        "-Wl,--unresolved-symbols=ignore-all", "-o",
+                        str(stub_so), str(log_stub_source), str(nid_source)]
+        subprocess.run(stub_command, check=True, stdout=subprocess.DEVNULL)
+        extra_link = [str(stub_so), "-Wl,--allow-shlib-undefined"]
     command = [str(sdk / "bin/prospero-clang"), *flags, "-I" + str(logging),
                "-I" + str(output), "-I" + str(ROOT / "source"),
-               *[str(p) for p in files if p.suffix == ".c"], "-o", str(elf)]
+               *[str(p) for p in files if p.suffix == ".c"],
+               *extra_link, "-o", str(elf)]
     with (output / "build.log").open("w") as log:
         log.write(json.dumps(command) + "\n")
         log.flush()
@@ -150,7 +172,8 @@ def main():
                                             "live-target-stop": "live-title-signal-stop-read-only",
                                             "debug-retention": "disposable-debug-retention-child",
                                             "move-only": "move-only-donor-reference-round-trip",
-                                            "retained-cross-process": "disposable-retained-cross-process-ref-transfer"}[args.probe],
+                                            "retained-cross-process": "disposable-retained-cross-process-ref-transfer",
+                                            "preentry-log": "read-only-preentry-system-log-snapshot"}[args.probe],
                                    "receiver": ("exclusive" if args.exclusive_receiver else "atomic")
                                                if args.probe == "transport" else None,
                                    "target_pid": args.target_pid if args.probe == "target-dirs" else None,
