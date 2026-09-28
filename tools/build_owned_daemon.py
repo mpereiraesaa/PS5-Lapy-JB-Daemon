@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the explicitly gated FW 12.02 owned-root candidate without fetching deps."""
+"""Build the runtime-checked owned-root daemon without fetching dependencies."""
 import argparse
 import hashlib
 import json
@@ -66,7 +66,7 @@ def main():
         suffix += "-verified-client"
     if args.max_requests:
         suffix += f"-max{args.max_requests}"
-    output = ROOT / ("build/owned_root_daemon-fw1202" + suffix)
+    output = ROOT / ("build/owned_root_daemon" + suffix)
     output.mkdir(parents=True, exist_ok=True)
     (output / "owned_identity.h").write_text(
         '#define LAPY_OWNED_ID "' + identity + '"\n')
@@ -82,7 +82,8 @@ def main():
     if elf.read_bytes()[:4] != b"\x7fELF":
         raise RuntimeError("output is not ELF")
     manifest = {"schema": "lapy-owned-build/1", "build_id": identity,
-                "firmware": "12.02", "target_title": title,
+                "firmware": "SDK-supported, runtime layout check required",
+                "validated_firmware": ["12.02"], "target_title": title,
                 "max_requests": (args.max_requests or None) if args.service else 1,
                 "service": args.service,
                 "require_client_result": args.require_client_result or not args.service,

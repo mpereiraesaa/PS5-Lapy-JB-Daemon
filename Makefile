@@ -1,4 +1,4 @@
-# The owned-root backend is firmware-gated to 12.02 and requires a cooperative
+# The owned-root backend requires runtime layout validation and a cooperative
 # title credential clone before each elevation request.
 PYTHON ?= python3
 HOST_CC ?= cc

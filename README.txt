@@ -1,7 +1,8 @@
 FORK STATUS (mpereiraesaa)
 -------------------------
 The current fork and release are documented in README.md. A cooperative
-owned-root backend was validated on FW 12.02 only. It uses the new
+owned-root backend was validated on FW 12.02 only; other SDK-supported
+firmware is experimental and must pass runtime layout checks. It uses the new
 /download0/elevate_proc marker. The inherited lapy_jb_daemon.elf remains
 an upstream artifact, not the corrected release ELF.
 

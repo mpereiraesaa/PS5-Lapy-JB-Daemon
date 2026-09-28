@@ -1,10 +1,13 @@
 # PS5 Lapy JB Daemon — owned-root fork
 
-This fork provides a resident elevation daemon for **PS5 firmware 12.02**.
-It is intended for homebrew that repeatedly launches processes needing `/data`
-access, such as a launcher starting games. **Other firmware versions have not
-been validated** and are rejected at startup. The old backend is available
-only through the explicit `make legacy` target.
+This fork provides a resident elevation daemon for PS5 firmware supported by
+the payload SDK. It is intended for homebrew that repeatedly launches processes
+needing `/data` access, such as a launcher starting games. **Only firmware
+12.02 has been validated on a console.** Other versions are experimental: the
+daemon checks its assumed kernel layout with native `getgroups` and a
+disposable child before changing a target, and refuses to proceed if the
+checks fail. The old backend
+is available only through the explicit `make legacy` target.
 
 Legacy Lapy directly overwrites a process's root and jail pointers. Repeated
 use on our console was associated with a panic after roughly 20–29 elevations
@@ -48,7 +51,7 @@ PS5_PAYLOAD_SDK=/path/to/ps5-payload-sdk make check
 PS5_PAYLOAD_SDK=/path/to/ps5-payload-sdk make owned-service
 ```
 
-The ELF is `build/owned_root_daemon-fw1202-service/lapy_owned_root_daemon.elf`.
+The ELF is `build/owned_root_daemon-service/lapy_owned_root_daemon.elf`.
 Load it once via an ELF loader; it stays resident and watches `PPSA*` requests.
 For a bounded diagnostic build, pass `--service --max-requests N` to
 `tools/build_owned_daemon.py`. The daemon emits machine-readable `ps5log/1`
@@ -60,12 +63,16 @@ On one owned **FW 12.02** PS5, a one-request build completed **32/32**
 consecutive launch → elevate → `/data` read/write → close cycles in one boot.
 Every cycle reported balanced root counters. A bounded resident build then
 handled **5/5** requests in one daemon process, with `/data` read/write
-confirmed after each. A later guarded resident request also passed. Those
+confirmed after each. A later guarded resident request also passed. The
+runtime layout preflight then passed on 12.02 and another resident request
+completed with `/data` read/write. Those
 finite test ELFs and hashes are in the design record. The published unbounded
 service ELF is built from this source; it has not been exercised indefinitely.
 
-Other firmware needs its own structure-layout calibration and console
-validation. Other homebrews, multithreaded callers, concurrent daemons and
+The runtime check can reject a firmware whose layout or native reference
+behavior differs; passing that check is not a substitute for an attended
+repeatability test on that firmware. Other homebrews, multithreaded callers,
+concurrent daemons and
 unusual exit or exec paths are not established by these trials. Historical
 source research is in [ELEVATION.md](docs/ELEVATION.md). License terms are in
 [LICENSE](LICENSE).

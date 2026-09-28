@@ -3,7 +3,8 @@
 This investigation predates the corrected FW 12.02 backend. The current
 default is the cooperative daemon in [OWNED_ROOT_DAEMON.md](OWNED_ROOT_DAEMON.md).
 `make legacy` still builds the old mechanism explicitly for comparison.
-Other firmware remains unvalidated.
+Only FW 12.02 has console validation; other SDK-supported firmware must pass
+runtime layout checks and remains experimental.
 
 ## Source and artifact identity
 
