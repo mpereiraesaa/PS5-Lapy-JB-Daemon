@@ -19,7 +19,7 @@ def main():
     parser.add_argument("--logging-client", type=Path, required=True)
     parser.add_argument("--exclusive-receiver", action="store_true",
                         help="test explicit CLOEXEC setup in this non-execing probe only")
-    parser.add_argument("--probe", choices=("transport", "cross-process-directory", "credentials", "vfs", "cross-root", "sysent", "root-refs", "root-native-refs", "kernel-symbols", "filedesc-unshare", "target-dirs", "request-dirs", "donor-filedesc", "null-jail-transfer", "old-root-release", "ptrace-quiescence", "signal-quiescence", "move-only"), default="transport")
+    parser.add_argument("--probe", choices=("transport", "cross-process-directory", "credentials", "vfs", "cross-root", "sysent", "root-refs", "root-native-refs", "kernel-symbols", "filedesc-unshare", "target-dirs", "request-dirs", "donor-filedesc", "null-jail-transfer", "old-root-release", "ptrace-quiescence", "signal-quiescence", "thread-stop-calibration", "move-only"), default="transport")
     parser.add_argument("--target-pid", type=int,
                         help="live process PID to observe; required only for target-dirs")
     parser.add_argument("--sony-privileges", action="store_true",
@@ -62,6 +62,7 @@ def main():
              "old-root-release": ("donor_old_root_probe.c",),
              "ptrace-quiescence": ("ptrace_quiescence_probe.c",),
              "signal-quiescence": ("signal_quiescence_probe.c",),
+             "thread-stop-calibration": ("thread_stop_calibration_probe.c",),
              "move-only": ("donor_move_only_probe.c", "donor_transaction.c",
                            "donor_transaction.h")}[args.probe]
     files = [ROOT / "source" / name for name in names]
@@ -71,7 +72,7 @@ def main():
     sdk_inputs = {str(p.relative_to(sdk)): sha(p)
                   for p in sorted((sdk / "target").rglob("*")) if p.is_file()}
     flags = ["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror"]
-    if args.probe in ("ptrace-quiescence", "signal-quiescence"):
+    if args.probe in ("ptrace-quiescence", "signal-quiescence", "thread-stop-calibration"):
         flags.append("-pthread")
     if args.exclusive_receiver:
         flags.append("-DLAPY_PROBE_EXCLUSIVE=1")
@@ -97,6 +98,7 @@ def main():
             "old-root-release": "old_root_release",
             "ptrace-quiescence": "ptrace_quiescence",
             "signal-quiescence": "signal_quiescence",
+            "thread-stop-calibration": "thread_stop_calibration",
             "move-only": "move_only"}[args.probe]
     output = ROOT / ("build/probe" if args.probe == "transport" else
                      f"build/{stem}-probe/pid-{args.target_pid}" if args.probe == "target-dirs" else
@@ -136,6 +138,7 @@ def main():
                                             "old-root-release": "old-root-native-donor-release",
                                             "ptrace-quiescence": "disposable-multithread-ptrace-quiescence",
                                             "signal-quiescence": "disposable-multithread-signal-quiescence",
+                                            "thread-stop-calibration": "disposable-thread-and-stop-field-calibration",
                                             "move-only": "move-only-donor-reference-round-trip"}[args.probe],
                                    "receiver": ("exclusive" if args.exclusive_receiver else "atomic")
                                                if args.probe == "transport" else None,
