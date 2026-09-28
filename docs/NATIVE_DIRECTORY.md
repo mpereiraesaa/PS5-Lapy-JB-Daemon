@@ -16,6 +16,28 @@ descriptors, closing any rights it received before reporting an error. The
 request ID is correlation, not authentication. The caller must authenticate and
 bind the channel to the intended live process before transferring a root fd.
 
+The native cross-process probe builds with `--probe cross-process-directory`.
+Its child first closes the root FD inherited from `rfork(RFPROC | RFFDG)`,
+receives a new root FD over `SCM_RIGHTS`, and verifies its identity and
+`FD_CLOEXEC` after the parent has closed the sending FD. The child is bounded
+by a 15-second alarm and the parent reaps it. Analyze the private artifacts
+with:
+
+```sh
+python3 tools/analyze_cross_process_directory.py STREAM.log SERVER.json \
+  build/cross_process_directory-probe/manifest.json \
+  build/cross_process_directory-probe/lapy_cross_process_directory_probe.elf
+```
+
+On owned firmware 12.02, build
+`758960f80b3dfd7beecda52414a54e4e1870c10590584b6e6a5ec36d8aa28d7f`
+(ELF SHA256 `cabf8b8a700bd70e049b914fd6b81b19f49c4c3a31c099a800a5798358e3328c`)
+completed with a clean `ps5log/1` BYE and no gaps. The identity-bound
+analyzer accepted receipt and use after sender close. This establishes
+cross-process descriptor transfer **within the same root context** only.
+It does not establish a connected or authenticated socket across a title
+sandbox, nor does it make the target invoke a native VFS operation.
+
 `make check` exercises 1000 transfers, Linux descriptor-count stability, hostile
 packets, kernel ancillary truncation, nonblocking receive, cross-process
 ownership and use after sender close, and a disconnected peer with SIGPIPE
