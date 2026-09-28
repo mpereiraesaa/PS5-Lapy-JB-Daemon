@@ -20,7 +20,7 @@ def main():
     parser.add_argument("--logging-client", type=Path, required=True)
     parser.add_argument("--exclusive-receiver", action="store_true",
                         help="test explicit CLOEXEC setup in this non-execing probe only")
-    parser.add_argument("--probe", choices=("transport", "cross-process-directory", "credentials", "vfs", "cross-root", "sysent", "root-refs", "root-native-refs", "kernel-symbols", "filedesc-unshare", "target-dirs", "request-dirs", "donor-filedesc", "null-jail-transfer", "old-root-release", "ptrace-quiescence", "signal-quiescence", "thread-stop-calibration", "live-target-stop", "debug-retention", "move-only", "retained-cross-process", "preentry-log"), default="transport")
+    parser.add_argument("--probe", choices=("transport", "cross-process-directory", "credentials", "vfs", "cross-root", "sysent", "root-refs", "root-native-refs", "kernel-symbols", "filedesc-unshare", "target-dirs", "request-dirs", "donor-filedesc", "null-jail-transfer", "old-root-release", "ptrace-quiescence", "signal-quiescence", "thread-stop-calibration", "live-target-stop", "debug-retention", "move-only", "retained-cross-process", "retained-two-root", "preentry-log"), default="transport")
     parser.add_argument("--target-pid", type=int,
                         help="live process PID to observe; required only for target-dirs")
     parser.add_argument("--target-title",
@@ -76,6 +76,9 @@ def main():
              "retained-cross-process": ("retained_cross_process_probe.c",
                                         "donor_transaction.c",
                                         "donor_transaction.h"),
+             "retained-two-root": ("retained_two_root_probe.c",
+                                    "donor_transaction.c",
+                                    "donor_transaction.h"),
              "preentry-log": ("preentry_log_probe.c",)}[args.probe]
     files = [ROOT / "source" / name for name in names]
     inputs = {str(p.relative_to(ROOT)): sha(p) for p in files}
@@ -89,7 +92,7 @@ def main():
             raise FileNotFoundError(log_stub_source)
         sdk_inputs["sdk-source/sce_stubs/libkernel_sys.c"] = sha(log_stub_source)
     flags = ["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror"]
-    if args.probe in ("ptrace-quiescence", "signal-quiescence", "thread-stop-calibration", "debug-retention", "retained-cross-process"):
+    if args.probe in ("ptrace-quiescence", "signal-quiescence", "thread-stop-calibration", "debug-retention", "retained-cross-process", "retained-two-root"):
         flags.append("-pthread")
     if args.exclusive_receiver:
         flags.append("-DLAPY_PROBE_EXCLUSIVE=1")
@@ -122,6 +125,7 @@ def main():
             "debug-retention": "debug_retention",
             "move-only": "move_only",
             "retained-cross-process": "retained_cross_process",
+            "retained-two-root": "retained_two_root",
             "preentry-log": "preentry_log"}[args.probe]
     output = ROOT / ("build/probe" if args.probe == "transport" else
                      f"build/{stem}-probe/pid-{args.target_pid}" if args.probe == "target-dirs" else
@@ -182,6 +186,7 @@ def main():
                                             "debug-retention": "disposable-debug-retention-child",
                                             "move-only": "move-only-donor-reference-round-trip",
                                             "retained-cross-process": "disposable-retained-cross-process-ref-transfer",
+                                            "retained-two-root": "disposable-two-root-and-old-root-release",
                                             "preentry-log": "read-only-preentry-system-log-snapshot"}[args.probe],
                                    "receiver": ("exclusive" if args.exclusive_receiver else "atomic")
                                                if args.probe == "transport" else None,
