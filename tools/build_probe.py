@@ -19,7 +19,7 @@ def main():
     parser.add_argument("--logging-client", type=Path, required=True)
     parser.add_argument("--exclusive-receiver", action="store_true",
                         help="test explicit CLOEXEC setup in this non-execing probe only")
-    parser.add_argument("--probe", choices=("transport", "cross-process-directory", "credentials", "vfs", "cross-root", "sysent", "root-refs", "root-native-refs", "kernel-symbols", "filedesc-unshare", "target-dirs", "request-dirs", "donor-filedesc", "null-jail-transfer", "old-root-release", "ptrace-quiescence", "signal-quiescence", "thread-stop-calibration", "live-target-stop", "debug-retention", "move-only"), default="transport")
+    parser.add_argument("--probe", choices=("transport", "cross-process-directory", "credentials", "vfs", "cross-root", "sysent", "root-refs", "root-native-refs", "kernel-symbols", "filedesc-unshare", "target-dirs", "request-dirs", "donor-filedesc", "null-jail-transfer", "old-root-release", "ptrace-quiescence", "signal-quiescence", "thread-stop-calibration", "live-target-stop", "debug-retention", "move-only", "retained-cross-process"), default="transport")
     parser.add_argument("--target-pid", type=int,
                         help="live process PID to observe; required only for target-dirs")
     parser.add_argument("--sony-privileges", action="store_true",
@@ -66,7 +66,10 @@ def main():
              "live-target-stop": ("live_target_stop_probe.c",),
              "debug-retention": ("debug_retention_probe.c",),
              "move-only": ("donor_move_only_probe.c", "donor_transaction.c",
-                           "donor_transaction.h")}[args.probe]
+                           "donor_transaction.h"),
+             "retained-cross-process": ("retained_cross_process_probe.c",
+                                        "donor_transaction.c",
+                                        "donor_transaction.h")}[args.probe]
     files = [ROOT / "source" / name for name in names]
     inputs = {str(p.relative_to(ROOT)): sha(p) for p in files}
     inputs["external/ps5log.h"] = sha(logging / "ps5log.h")
@@ -74,7 +77,7 @@ def main():
     sdk_inputs = {str(p.relative_to(sdk)): sha(p)
                   for p in sorted((sdk / "target").rglob("*")) if p.is_file()}
     flags = ["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror"]
-    if args.probe in ("ptrace-quiescence", "signal-quiescence", "thread-stop-calibration", "debug-retention"):
+    if args.probe in ("ptrace-quiescence", "signal-quiescence", "thread-stop-calibration", "debug-retention", "retained-cross-process"):
         flags.append("-pthread")
     if args.exclusive_receiver:
         flags.append("-DLAPY_PROBE_EXCLUSIVE=1")
@@ -103,7 +106,8 @@ def main():
             "thread-stop-calibration": "thread_stop_calibration",
             "live-target-stop": "live_target_stop",
             "debug-retention": "debug_retention",
-            "move-only": "move_only"}[args.probe]
+            "move-only": "move_only",
+            "retained-cross-process": "retained_cross_process"}[args.probe]
     output = ROOT / ("build/probe" if args.probe == "transport" else
                      f"build/{stem}-probe/pid-{args.target_pid}" if args.probe == "target-dirs" else
                      f"build/{stem}-probe")
@@ -145,7 +149,8 @@ def main():
                                             "thread-stop-calibration": "disposable-thread-and-stop-field-calibration",
                                             "live-target-stop": "live-title-signal-stop-read-only",
                                             "debug-retention": "disposable-debug-retention-child",
-                                            "move-only": "move-only-donor-reference-round-trip"}[args.probe],
+                                            "move-only": "move-only-donor-reference-round-trip",
+                                            "retained-cross-process": "disposable-retained-cross-process-ref-transfer"}[args.probe],
                                    "receiver": ("exclusive" if args.exclusive_receiver else "atomic")
                                                if args.probe == "transport" else None,
                                    "target_pid": args.target_pid if args.probe == "target-dirs" else None,
