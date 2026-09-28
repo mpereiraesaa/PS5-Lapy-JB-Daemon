@@ -19,7 +19,7 @@ def main():
     parser.add_argument("--logging-client", type=Path, required=True)
     parser.add_argument("--exclusive-receiver", action="store_true",
                         help="test explicit CLOEXEC setup in this non-execing probe only")
-    parser.add_argument("--probe", choices=("transport", "credentials", "vfs", "cross-root", "sysent", "root-refs", "root-native-refs", "kernel-symbols", "filedesc-unshare", "target-dirs"), default="transport")
+    parser.add_argument("--probe", choices=("transport", "cross-process-directory", "credentials", "vfs", "cross-root", "sysent", "root-refs", "root-native-refs", "kernel-symbols", "filedesc-unshare", "target-dirs"), default="transport")
     parser.add_argument("--target-pid", type=int,
                         help="live process PID to observe; required only for target-dirs")
     parser.add_argument("--sony-privileges", action="store_true",
@@ -45,6 +45,7 @@ def main():
     sdk = Path(args.sdk).resolve()
     logging = args.logging_client.resolve()
     names = {"transport": ("native_probe.c", "native_directory.c", "native_directory.h"),
+             "cross-process-directory": ("cross_process_directory_probe.c", "native_directory.c", "native_directory.h"),
              "credentials": ("credential_probe.c",),
              "vfs": ("vfs_probe.c", "native_vfs_syscall.h"),
              "cross-root": ("cross_root_probe.c", "native_vfs_syscall.h", "vfs_prerequisites.h",
@@ -74,6 +75,7 @@ def main():
     identity = hashlib.sha256(json.dumps({"inputs": inputs, "sdk": sdk_inputs,
                                          "flags": flags}, sort_keys=True).encode()).hexdigest()
     stem = {"transport": "native", "credentials": "credential", "vfs": "vfs",
+            "cross-process-directory": "cross_process_directory",
             "cross-root": "cross_root", "sysent": "sysent",
             "root-refs": "root_refs", "kernel-symbols": "kernel_symbols",
             "root-native-refs": "root_native_refs",
@@ -101,7 +103,9 @@ def main():
     manifest.write_text(json.dumps({"schema": "lapy-probe-build/1", "build_id": identity,
                                    "inputs_sha256": inputs, "sdk_inputs_sha256": sdk_inputs,
                                    "elf_sha256": sha(elf),
-                                   "mode": {"transport": "transport-only", "credentials": "same-euid",
+                                   "mode": {"transport": "transport-only",
+                                            "cross-process-directory": "cross-process-root-fd",
+                                            "credentials": "same-euid",
                                             "vfs": "existing-root", "cross-root": "cross-root",
                                             "sysent": "sysent-read-only",
                                             "root-refs": "root-vnode-read-only",
