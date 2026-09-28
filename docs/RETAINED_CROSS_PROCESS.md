@@ -61,3 +61,18 @@ a final sample. The immediately following independent run began and ended at
 `61/60`, which rules out a persistent two-reference loss in that cycle but
 does not identify the concurrent activity. The revised probe records the
 intermediate anomaly and always checks final balance after target exit.
+
+The revised build
+`6406645999587935dbb83018d676fc9adc9da2d67bed9877c47403ff286f4086`
+(ELF SHA256 `ce0edf7e9f6575dc8d686cd456e07317b12e4988a55722ea3db431cfe006a58e`)
+completed **35 consecutive cycles under one console lease**. Each cycle
+attached to a fresh two-thread child, stopped both threads, committed the
+transfer, resumed/detached, reaped both children, and returned the root
+hold/use fields from `61/60` to `61/60`. No cycle reported intermediate
+interference. All 35 private streams have complete `BYE` records and were
+independently rehashed against the ignored `stress_summary.json` index;
+its SHA256 is `46d20d94f48ac18880ca0177c0082adb0828160981c0389c757d7fbab306dc5b`.
+The last stream SHA256 is
+`e22d0c81565bc7f1c2346039fc699b95d51e0593afa6af6f8561fb630b837a4e`.
+The console remained available. This exceeds the historical 20–29 legacy
+escalations for this controlled path, not for a real title elevation.
