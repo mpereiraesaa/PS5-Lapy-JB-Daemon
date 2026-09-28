@@ -20,6 +20,7 @@ one, compare its SHA256 to the listed value; a rebuild changes its identity.
 | 5 | `build/root_native_refs-probe/lapy_root_native_refs_probe.elf` | `5234a1754f84d4af0e27c227e1c26cf0659690586cc0dbcad07a80d69dbbc81e` | Native `open`/`close` calibration of root-vnode reference fields in a disposable payload. |
 | 6 | `build/cross_process_directory-probe/lapy_cross_process_directory_probe.elf` | `cabf8b8a700bd70e049b914fd6b81b19f49c4c3a31c099a800a5798358e3328c` | Native root FD transfer between disposable processes and use after sender close. |
 | 7 | `build/request_dirs-probe/lapy_request_dirs_probe.elf` | See current build manifest | One-shot observation of a new `PPSA99995` request before elevation; it acknowledges without elevation. |
+| 8 | `build/donor_filedesc-probe/lapy_donor_filedesc_probe.elf` | See current build manifest | Native donor filedesc copy and release, measured through root-vnode fields; no pointer writes. |
 
 The corresponding build IDs are, respectively,
 `a0b230010a01b8bb21b2c4e2e33ce849d3d5875247fc569713503d5cdde2d89c`,
@@ -57,6 +58,12 @@ Step 6 has also completed on 12.02. Its child closes the inherited root FD
 before receiving a new one, then verifies directory identity and use after
 the parent closes its copy. This tests cross-process transport in the same
 root context, not delivery into a sandboxed game or launcher.
+
+Step 8 completed on owned 12.02 without a title launch or legacy elevation.
+Follow `DONOR_FILEDESC_PROBE.md`: the private filedesc child acquired two
+system-root references natively and released both at exit, with a complete
+identity-bound ps5log/1 record. This is a prerequisite for a reference-donor
+design, not proof that a target can be changed safely.
 
 Step 7 was built and run once on 12.02. The title launcher did not pass the
 lab supervisor's service preflight because `shsrv` was unavailable; the
