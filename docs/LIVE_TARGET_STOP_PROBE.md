@@ -45,3 +45,40 @@ as expected because this observer did not elevate it. Private evidence:
 `20260928T090714565Z_PPSA99994_lapy-hello-elevation-gate_0x21158eb62c73`.
 This single-thread observation does not establish all-thread quiescence for
 other titles or solve the PID-retention race described above.
+
+## Read-only pre-elevation state variant
+
+Build `PPSA99994` with `python3 tools/build_probe.py --probe live-target-stop
+--target-title PPSA99994 --observe-state --sdk <installed-sdk>
+--logging-client ../logging_server/client`. This variant observes the stopped
+target's root, jail, current directory, credential and prison fields in two
+snapshots. It emits only boolean comparisons with the system root and expected
+privileged values, never kernel pointers or credential values. The target is
+resumed and acknowledged by the same path as the original stop probe. No
+elevation or kernel write is performed.
+
+The offline FW 12.02 artifact in `build/live_target_stop-probe/PPSA99994/state/`
+has build ID `f67ac3d1565290fbe49f49408ba3068ff32fb4ee4f5af141393ba9ab5f1a855f`
+and ELF SHA-256
+`52ced259f11c95968d515a96759344069c5de3aa0103f1c7cb5bfae4ed54fb79`.
+These identify this specific build, not a console validation. Launch the
+observer through elfldr, launch the isolated Hello World title while it waits
+for a fresh request, and collect the private `LAPYTS` `ps5log/1` stream and
+its server manifest. Under the global `console:PS5` lease, close the title
+after the observer acknowledges it. Analyze the exact artifacts with:
+
+```sh
+python3 tools/analyze_live_target_state.py \
+  <LAPYTS.log> <LAPYTS.server.json> \
+  build/live_target_stop-probe/PPSA99994/state/manifest.json \
+  build/live_target_stop-probe/PPSA99994/state/lapy_live_target_stop_probe.elf
+```
+
+The analyzer requires a clean stream, exact ELF hash and build ID, a private
+filedesc, stable stopped thread list, successful resume and all state fields.
+It reports observed identity flags only. A positive result would establish the
+pre-elevation state of this one title at that instant; it cannot prove vnode
+reference ownership, all-thread behavior of other titles, or safety of a
+subsequent root transfer. The legacy daemon's on-screen `unsandboxed`
+notification confirms that it acknowledged a separate request and does not
+validate this read-only variant or the reference-lifetime hypothesis.
