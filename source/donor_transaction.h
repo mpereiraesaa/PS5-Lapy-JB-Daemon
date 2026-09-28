@@ -40,4 +40,17 @@ enum lapy_replace_result lapy_replace_owned_ref(
     intptr_t target_slot, intptr_t receiver_slot,
     intptr_t system_root, intptr_t expected_old);
 
+/* Replace both target directory slots using two independently owned native
+ * root references. Each displaced non-null target reference is moved to a
+ * distinct empty receiver slot, whose process can later exit through native
+ * filedesc cleanup. The six slots must be in private, quiescent filedescs.
+ * HELD forbids every owner from resuming or exiting until independently
+ * repaired; it is not a recoverable application error. */
+enum lapy_replace_result lapy_replace_two_roots(
+    const struct lapy_slot_io *io,
+    intptr_t first_source, intptr_t second_source,
+    intptr_t target_root, intptr_t target_jail,
+    intptr_t first_receiver, intptr_t second_receiver,
+    intptr_t system_root, intptr_t old_root, intptr_t old_jail);
+
 #endif

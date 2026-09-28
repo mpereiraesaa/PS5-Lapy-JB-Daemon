@@ -8,7 +8,7 @@
 #define OLD  0x2000
 
 struct model {
-    intptr_t slot[4];
+    intptr_t slot[7];
     unsigned root_refs, old_refs;
     unsigned writes, reads;
     unsigned fail_write_at, fail_read_at;
@@ -19,7 +19,7 @@ struct model {
 static void verify_no_duplicate(struct model *m)
 {
     unsigned root = 0, old = 0;
-    for (unsigned i = 1; i <= 3; ++i) {
+    for (unsigned i = 1; i <= 6; ++i) {
         root += m->slot[i] == ROOT;
         old += m->slot[i] == OLD;
     }
@@ -30,7 +30,7 @@ static void verify_no_duplicate(struct model *m)
 static int read_slot(void *context, intptr_t address, intptr_t *value)
 {
     struct model *m = context;
-    if (address < 1 || address > 3) return -1;
+    if (address < 1 || address > 6) return -1;
     if (++m->reads == m->fail_read_at) return -1;
     *value = m->slot[address];
     return 0;
@@ -39,7 +39,7 @@ static int read_slot(void *context, intptr_t address, intptr_t *value)
 static int write_slot(void *context, intptr_t address, intptr_t value)
 {
     struct model *m = context;
-    if (address < 1 || address > 3) return -1;
+    if (address < 1 || address > 6) return -1;
     ++m->writes;
     if (m->writes == m->fail_write_at && !m->fail_after_write)
         return -1;
@@ -125,10 +125,73 @@ static void fault_cases(void)
     assert(!m.duplicate_seen);
 }
 
+static struct model start_two(intptr_t old_root, intptr_t old_jail)
+{
+    struct model m;
+    memset(&m, 0, sizeof(m));
+    m.slot[1] = ROOT; m.slot[2] = ROOT;
+    m.slot[3] = old_root; m.slot[4] = old_jail;
+    m.root_refs = 2 + (old_root == ROOT) + (old_jail == ROOT);
+    m.old_refs = (old_root == OLD) + (old_jail == OLD);
+    verify_no_duplicate(&m);
+    return m;
+}
+
+static enum lapy_replace_result run_two(struct model *m,
+                                         intptr_t old_root, intptr_t old_jail)
+{
+    struct lapy_slot_io operations = io(m);
+    return lapy_replace_two_roots(&operations, 1, 2, 3, 4, 5, 6,
+                                  ROOT, old_root, old_jail);
+}
+
+static void two_root_cases(void)
+{
+    const intptr_t olds[] = {0, OLD, ROOT};
+    for (unsigned a = 0; a < 3; ++a)
+        for (unsigned b = 0; b < 3; ++b) {
+            struct model m = start_two(olds[a], olds[b]);
+            assert(run_two(&m, olds[a], olds[b]) == LAPY_REPLACE_COMPLETE);
+            assert(m.slot[1] == 0 && m.slot[2] == 0);
+            assert(m.slot[3] == ROOT && m.slot[4] == ROOT);
+            assert(m.slot[5] == olds[a] && m.slot[6] == olds[b]);
+            assert(!m.duplicate_seen);
+        }
+
+    /* Inject a failure at every relevant read/write position, including an
+     * error returned after a write that actually reached the model. */
+    for (unsigned after = 0; after < 2; ++after)
+        for (unsigned index = 1; index <= 42; ++index) {
+            struct model m = start_two(OLD, 0);
+            m.fail_after_write = after;
+            if (index <= 18) m.fail_write_at = index;
+            else m.fail_read_at = index - 18;
+            enum lapy_replace_result result = run_two(&m, OLD, 0);
+            assert(!m.duplicate_seen);
+            if (result == LAPY_REPLACE_COMPLETE) {
+                assert(m.slot[1] == 0 && m.slot[2] == 0);
+                assert(m.slot[3] == ROOT && m.slot[4] == ROOT);
+                assert(m.slot[5] == OLD && m.slot[6] == 0);
+            } else if (result == LAPY_REPLACE_UNCHANGED ||
+                       result == LAPY_REPLACE_ROLLED_BACK) {
+                assert(m.slot[1] == ROOT && m.slot[2] == ROOT);
+                assert(m.slot[3] == OLD && m.slot[4] == 0);
+                assert(m.slot[5] == 0 && m.slot[6] == 0);
+            }
+        }
+
+    struct model m = start_two(OLD, 0);
+    struct lapy_slot_io operations = io(&m);
+    assert(lapy_replace_two_roots(&operations, 1, 1, 3, 4, 5, 6,
+                                  ROOT, OLD, 0) == LAPY_REPLACE_UNCHANGED);
+    assert(!m.writes);
+}
+
 int main(void)
 {
     success_cases();
     fault_cases();
-    puts("move-only donor transaction: ownership, rollback and faults passed");
+    two_root_cases();
+    puts("move-only donor transaction: two roots, ownership, rollback and faults passed");
     return 0;
 }

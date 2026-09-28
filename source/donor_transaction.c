@@ -87,3 +87,58 @@ enum lapy_replace_result lapy_replace_owned_ref(
                    LAPY_MOVE_COMMITTED
            ? LAPY_REPLACE_ROLLED_BACK : LAPY_REPLACE_HELD;
 }
+
+static int distinct_six(const intptr_t slots[6])
+{
+    for (unsigned i = 0; i < 6; ++i) {
+        if (!slots[i]) return 0;
+        for (unsigned j = 0; j < i; ++j)
+            if (slots[i] == slots[j]) return 0;
+    }
+    return 1;
+}
+
+static enum lapy_replace_result undo_first(const struct lapy_slot_io *io,
+                                           intptr_t source,
+                                           intptr_t target,
+                                           intptr_t receiver,
+                                           intptr_t root, intptr_t old)
+{
+    if (lapy_move_owned_ref(io, target, source, root) != LAPY_MOVE_COMMITTED)
+        return LAPY_REPLACE_HELD;
+    if (old && lapy_move_owned_ref(io, receiver, target, old) !=
+                   LAPY_MOVE_COMMITTED)
+        return LAPY_REPLACE_HELD;
+    return LAPY_REPLACE_ROLLED_BACK;
+}
+
+enum lapy_replace_result lapy_replace_two_roots(
+    const struct lapy_slot_io *io,
+    intptr_t first_source, intptr_t second_source,
+    intptr_t target_root, intptr_t target_jail,
+    intptr_t first_receiver, intptr_t second_receiver,
+    intptr_t system_root, intptr_t old_root, intptr_t old_jail)
+{
+    const intptr_t slots[6] = {first_source, second_source,
+                               target_root, target_jail,
+                               first_receiver, second_receiver};
+    const intptr_t expected[6] = {system_root, system_root,
+                                  old_root, old_jail, 0, 0};
+    intptr_t observed = 0;
+    if (!io || !io->read || !io->write || !system_root ||
+        !distinct_six(slots)) return LAPY_REPLACE_UNCHANGED;
+    for (unsigned i = 0; i < 6; ++i)
+        if (io->read(io->context, slots[i], &observed) ||
+            observed != expected[i]) return LAPY_REPLACE_UNCHANGED;
+
+    enum lapy_replace_result first = lapy_replace_owned_ref(
+        io, first_source, target_root, first_receiver, system_root, old_root);
+    if (first != LAPY_REPLACE_COMPLETE) return first;
+
+    enum lapy_replace_result second = lapy_replace_owned_ref(
+        io, second_source, target_jail, second_receiver, system_root, old_jail);
+    if (second == LAPY_REPLACE_COMPLETE) return LAPY_REPLACE_COMPLETE;
+    if (second == LAPY_REPLACE_HELD) return LAPY_REPLACE_HELD;
+    return undo_first(io, first_source, target_root, first_receiver,
+                      system_root, old_root);
+}
