@@ -26,6 +26,8 @@ check-native:
 	./build/host/test_sony_scope
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -g -fsanitize=address,undefined -Isource source/root_references.c tests/test_root_references.c -o build/host/test_root_references
 	./build/host/test_root_references
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -g -fsanitize=address,undefined -Isource source/donor_transaction.c tests/test_donor_transaction.c -o build/host/test_donor_transaction
+	./build/host/test_donor_transaction
 
 # Compile the transport component only; this is not an elevation payload.
 native-components:
