@@ -19,14 +19,16 @@ def main():
     parser.add_argument("--logging-client", type=Path, required=True)
     parser.add_argument("--exclusive-receiver", action="store_true",
                         help="test explicit CLOEXEC setup in this non-execing probe only")
-    parser.add_argument("--probe", choices=("transport", "credentials"), default="transport")
+    parser.add_argument("--probe", choices=("transport", "credentials", "vfs", "cross-root"), default="transport")
     args = parser.parse_args()
     if args.probe != "transport" and args.exclusive_receiver:
         parser.error("--exclusive-receiver requires --probe transport")
     sdk = Path(args.sdk).resolve()
     logging = args.logging_client.resolve()
-    names = (("native_probe.c", "native_directory.c", "native_directory.h")
-             if args.probe == "transport" else ("credential_probe.c",))
+    names = {"transport": ("native_probe.c", "native_directory.c", "native_directory.h"),
+             "credentials": ("credential_probe.c",),
+             "vfs": ("vfs_probe.c", "native_vfs_syscall.h"),
+             "cross-root": ("cross_root_probe.c", "native_vfs_syscall.h", "vfs_prerequisites.h")}[args.probe]
     files = [ROOT / "source" / name for name in names]
     inputs = {str(p.relative_to(ROOT)): sha(p) for p in files}
     inputs["external/ps5log.h"] = sha(logging / "ps5log.h")
@@ -38,11 +40,13 @@ def main():
         flags.append("-DLAPY_PROBE_EXCLUSIVE=1")
     identity = hashlib.sha256(json.dumps({"inputs": inputs, "sdk": sdk_inputs,
                                          "flags": flags}, sort_keys=True).encode()).hexdigest()
-    output = ROOT / ("build/probe" if args.probe == "transport" else "build/credential-probe")
+    stem = {"transport": "native", "credentials": "credential", "vfs": "vfs",
+            "cross-root": "cross_root"}[args.probe]
+    output = ROOT / ("build/probe" if args.probe == "transport" else f"build/{stem}-probe")
     output.mkdir(parents=True, exist_ok=True)
     header = output / "probe_identity.h"
     header.write_text('#define LAPY_PROBE_ID "' + identity + '"\n')
-    elf = output / ("lapy_native_probe.elf" if args.probe == "transport" else "lapy_credential_probe.elf")
+    elf = output / f"lapy_{stem}_probe.elf"
     manifest = output / "manifest.json"
     elf.unlink(missing_ok=True)
     manifest.unlink(missing_ok=True)
@@ -58,7 +62,8 @@ def main():
     manifest.write_text(json.dumps({"schema": "lapy-probe-build/1", "build_id": identity,
                                    "inputs_sha256": inputs, "sdk_inputs_sha256": sdk_inputs,
                                    "elf_sha256": sha(elf),
-                                   "mode": "transport-only" if args.probe == "transport" else "same-euid",
+                                   "mode": {"transport": "transport-only", "credentials": "same-euid",
+                                            "vfs": "existing-root", "cross-root": "cross-root"}[args.probe],
                                    "receiver": ("exclusive" if args.exclusive_receiver else "atomic")
                                                if args.probe == "transport" else None,
                                    "console_validated": False}, indent=2, sort_keys=True) + "\n")
