@@ -9,7 +9,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <poll.h>
 #include <ps5/kernel.h>
 #include <signal.h>
 #include <stdint.h>
@@ -56,7 +55,6 @@ extern intptr_t kernel_get_ucred_prison(pid_t pid);
 
 struct child {
     pid_t pid;
-    int ready[2], release[2];
     intptr_t proc, fd;
     int stopped, reaped;
 };
@@ -277,29 +275,56 @@ static int await_client_result(const char *path)
 }
 #endif
 
-static void child_main(struct child *self)
+static void donor_release_signal(int signal_number)
 {
-    char command = 0;
-    close(self->ready[0]); close(self->release[1]);
-    if (write(self->ready[1], "R", 1) != 1) _exit(2);
-    if (read(self->release[0], &command, 1) != 1 || command != 'G') _exit(3);
+    (void)signal_number;
     _exit(0);
+}
+
+static void child_main(void)
+{
+    struct sigaction action;
+    sigset_t release_signal;
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = donor_release_signal;
+    sigemptyset(&action.sa_mask);
+    if (sigaction(SIGUSR1, &action, 0)) _exit(2);
+    sigemptyset(&release_signal);
+    sigaddset(&release_signal, SIGUSR1);
+    if (sigprocmask(SIG_UNBLOCK, &release_signal, 0)) _exit(3);
+    /* waitpid(WUNTRACED) is the readiness acknowledgement. The handler is
+     * installed before this stop, so an early release signal is safe. */
+    if (kill(getpid(), SIGSTOP)) _exit(4);
+    for (;;) pause();
 }
 
 static int start_child(struct child *self)
 {
-    char marker = 0;
-    if (pipe(self->ready) || pipe(self->release)) return errno ? errno : EIO;
     self->pid = rfork(RFPROC | RFFDG);
-    if (self->pid == 0) child_main(self);
+    if (self->pid == 0) child_main();
     if (self->pid < 0) return errno ? errno : EIO;
-    close(self->ready[1]); self->ready[1] = -1;
-    close(self->release[0]); self->release[0] = -1;
-    struct pollfd event = {self->ready[0], POLLIN, 0};
-    if (poll(&event, 1, 5000) != 1 ||
-        read(self->ready[0], &marker, 1) != 1 || marker != 'R')
-        return ETIMEDOUT;
-    return 0;
+    for (unsigned i = 0; i < 100; ++i) {
+        int status = 0;
+        pid_t result = waitpid(self->pid, &status, WNOHANG | WUNTRACED);
+        if (result == self->pid) {
+            if (!WIFSTOPPED(status) || WSTOPSIG(status) != SIGSTOP) {
+                if (WIFEXITED(status) || WIFSIGNALED(status))
+                    self->reaped = 1;
+                return EPROTO;
+            }
+            if (kill(self->pid, SIGCONT)) return errno ? errno : EIO;
+            for (unsigned resumed = 0; resumed < 100; ++resumed) {
+                struct snapshot state;
+                if (!snapshot(self->pid, &state) && !state.suspended)
+                    return 0;
+                usleep(10000);
+            }
+            return ETIMEDOUT;
+        }
+        if (result < 0) return errno ? errno : ECHILD;
+        usleep(50000);
+    }
+    return ETIMEDOUT;
 }
 
 static int stop_child(struct child *self, intptr_t root)
@@ -330,7 +355,7 @@ static int release_child(struct child *self)
         if (kill(self->pid, SIGCONT)) return errno ? errno : EIO;
         self->stopped = 0;
     }
-    if (write(self->release[1], "G", 1) != 1) return EPIPE;
+    if (kill(self->pid, SIGUSR1)) return errno ? errno : EIO;
     for (unsigned i = 0; i < 100; ++i) {
         pid_t result = waitpid(self->pid, &status, WNOHANG);
         if (result == self->pid) {
@@ -354,10 +379,6 @@ static int cleanup_child(struct child *self)
         else
             error = errno ? errno : ECHILD;
     }
-    if (self->ready[0] >= 0) close(self->ready[0]);
-    if (self->ready[1] >= 0) close(self->ready[1]);
-    if (self->release[0] >= 0) close(self->release[0]);
-    if (self->release[1] >= 0) close(self->release[1]);
     return error;
 }
 
@@ -366,8 +387,7 @@ static int cleanup_child(struct child *self)
  * RFPROC|RFFDG child before any target credential or directory write. */
 static int validate_root_reference_layout(intptr_t root, intptr_t self_fd)
 {
-    struct child donor = {.pid = -1, .ready = {-1,-1},
-                          .release = {-1,-1}};
+    struct child donor = {.pid = -1};
     struct snapshot observed;
     struct counts before = {0}, during = {0}, after = {0};
     int error = sample_root(root, "layout_before", &before);
@@ -512,10 +532,8 @@ static int run_one(pid_t pid, intptr_t system_root,
                    const struct counts *baseline,
                    size_t thread_credential_offset)
 {
-    struct child first = {.pid = -1, .ready = {-1,-1},
-                          .release = {-1,-1}};
-    struct child second = {.pid = -1, .ready = {-1,-1},
-                           .release = {-1,-1}};
+    struct child first = {.pid = -1};
+    struct child second = {.pid = -1};
     struct snapshot before, stopped, confirmed, donor;
     struct credentials original, elevated;
     struct lapy_slot_io io = {read_ptr, write_ptr, 0};
