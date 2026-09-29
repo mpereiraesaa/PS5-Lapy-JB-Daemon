@@ -9,6 +9,14 @@ title's two old root/jail references into the donor filedescs. Native donor
 exit releases the old references. The title owns the system-root references
 until its own exit or exec cleanup releases them.
 
+Donor readiness uses a pipe-free handshake. Each child installs a `SIGUSR1`
+exit handler, calls `kill(getpid(), SIGSTOP)`, and waits. The parent receives
+the stop through `waitpid(WUNTRACED)`, resumes the child, verifies its live
+process state, and later sends `SIGUSR1` to release it. The parent still uses
+`SIGSTOP` to quiesce donors during the root transfer. On FW 12.02,
+`raise(SIGSTOP)` returned an error in a disposable probe, so the child uses
+the native `kill` route. Any unexpected child state or timeout fails closed.
+
 A title must prepare its credential **before** writing the
 `/download0/elevate_proc` request. This is a protocol change from legacy Lapy;
 the old `etahen_jailbreak` marker is not accepted by this backend:
@@ -130,3 +138,19 @@ Other homebrews must adopt the cooperative `seteuid` call, or a
 future daemon must find a separately validated native target-clone method.
 The payload-side `PT_READ_I` and `PT_IO` attempts did not return usable target
 code bytes on this firmware, so they are not used for target cloning here.
+
+On a later FW 12.02 boot, the pipe-based resident daemon completed 55
+requests and then failed while starting its second donor. A fresh pipe write
+returned `ENOMEM` even in a standalone parent process before `rfork` or
+credential cloning; both the installed 0.2.1 and rolled-back 0.2.0 daemon
+then failed their startup donor check. The pipe-free candidate passed its
+root layout check in the same boot (`69/68 -> 71/70 -> 69/68`), completed one
+cooperative Prospero Win request, and then completed another three successive
+requests in one bounded resident process. Each title reported `data_after=1`,
+each transfer reported `donor_balance expected_two=1`. After the single
+request and again after the three-request sequence, with the titles closed,
+the root counters matched the pre-request baseline (`71/70` after a separate
+shsrv restart). A fresh pipe write still
+failed with `ENOMEM` after those requests. This validates the pipe-free
+control path and balanced transfer on that firmware; long-duration operation
+and the cause of pipe allocation failure remain unverified.

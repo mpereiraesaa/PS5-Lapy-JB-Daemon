@@ -17,6 +17,14 @@ roots. It also requires the target to clone its own credentials before the
 request. See [the design and evidence](docs/OWNED_ROOT_DAEMON.md). The crash
 mechanism is strongly suggested by the evidence, but no kernel dump proved it.
 
+Donor startup and release now use process signals and `waitpid`, with no
+per-request pipes. On FW 12.02, a fresh pipe could be created but writing one
+byte to it failed with `ENOMEM` after sustained use; the older daemon then
+lost its donor acknowledgement and exited. The signal-controlled candidate
+completed four cooperative `/data` elevations in that same boot while fresh
+pipe writes still failed. This avoids that immediate failure path; it does not
+identify or repair the kernel's pipe allocation problem.
+
 ## Required cooperation in the homebrew
 
 The request file is **`/download0/elevate_proc`**. It replaces the old
