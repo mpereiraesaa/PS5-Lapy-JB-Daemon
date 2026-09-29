@@ -43,6 +43,16 @@ It fails closed if those checks fail. The layout and lifecycle have been
 validated on **FW 12.02 only**; other SDK-supported firmware is experimental.
 It does not silently fall back to `Hijacker::jailbreak(true)`.
 
+If the launcher closes a requested title before any root slot is touched,
+the daemon now verifies that the original process identity has disappeared,
+reaps the two untouched native donors, and continues watching requests. A
+missing request marker is expected when the title's sandbox has already gone.
+If the original title is still present but credential restoration or ptrace
+detach fails, or if a root slot may have been touched, the daemon retains the
+`daemon_held` stop rather than guessing ownership. `target_drift` records the
+pre-transfer snapshot differences for diagnosis. This recovery path has not
+yet been exercised by a targeted title-exit race on the console.
+
 Build with the installed SDK and the lab's `ps5log/1` client:
 
 ```sh

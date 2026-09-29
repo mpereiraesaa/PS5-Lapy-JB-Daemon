@@ -343,17 +343,22 @@ static int release_child(struct child *self)
     return ETIMEDOUT;
 }
 
-static void cleanup_child(struct child *self)
+static int cleanup_child(struct child *self)
 {
+    int error = 0;
     if (self->pid > 0 && !self->reaped) {
         kill(self->pid, SIGCONT);
         kill(self->pid, SIGKILL);
-        waitpid(self->pid, 0, 0);
+        if (waitpid(self->pid, 0, 0) == self->pid)
+            self->reaped = 1;
+        else
+            error = errno ? errno : ECHILD;
     }
     if (self->ready[0] >= 0) close(self->ready[0]);
     if (self->ready[1] >= 0) close(self->ready[1]);
     if (self->release[0] >= 0) close(self->release[0]);
     if (self->release[1] >= 0) close(self->release[1]);
+    return error;
 }
 
 /* The SDK resolves rootvnode per firmware, but does not expose these vnode
@@ -387,7 +392,10 @@ static int validate_root_reference_layout(intptr_t root, intptr_t self_fd)
     if (after.hold != before.hold || after.use != before.use)
         error = EPROTO;
 done:
-    cleanup_child(&donor);
+    {
+        int cleanup_error = cleanup_child(&donor);
+        if (!error) error = cleanup_error;
+    }
     ps5log_printf(error ? PS5LOG_ERR : PS5LOG_MARK,
                   "root_layout build=%s valid=%d error=%d",
                   LAPY_OWNED_ID, error == 0, error);
@@ -484,6 +492,22 @@ static int await_target_stop(pid_t pid, const struct snapshot *before,
            same_stop(&first, stopped) ? 0 : EBUSY;
 }
 
+/* A traced title can be killed by its launcher while we prepare donors.
+ * Only loss of the original proc identity proves that its credentials and
+ * ptrace attachment no longer need restoring. Never use this after touching
+ * root slots: their ownership would then need separate proof. */
+static int original_target_gone(pid_t pid, intptr_t original_proc)
+{
+    for (unsigned i = 0; i < 20; ++i) {
+        if (kernel_get_proc(pid) != original_proc) {
+            usleep(10000);
+            if (kernel_get_proc(pid) != original_proc) return 1;
+        }
+        usleep(50000);
+    }
+    return 0;
+}
+
 static int run_one(pid_t pid, intptr_t system_root,
                    const struct counts *baseline,
                    size_t thread_credential_offset)
@@ -499,6 +523,7 @@ static int run_one(pid_t pid, intptr_t system_root,
     uint64_t self_authid = 0;
     int error = 0, attached = 0, stopped_target = 0;
     int auth_changed = 0, cred_changed = 0, moved = 0, detached = 0;
+    int roots_touched = 0;
     const char *stage = "target_preflight";
 
     if ((error = snapshot(pid, &before))) goto done;
@@ -535,7 +560,10 @@ static int run_one(pid_t pid, intptr_t system_root,
     }
     attached = 1;
     stage = "target_stop";
-    if ((error = await_target_stop(pid, &before, &stopped))) goto held;
+    if ((error = await_target_stop(pid, &before, &stopped))) {
+        if (original_target_gone(pid, before.proc)) goto target_gone;
+        goto held;
+    }
     stopped_target = 1;
     ps5log_printf(PS5LOG_MARK,
                   "target_stopped build=%s pid=%d threads=%u private_fd=1 private_cred=1",
@@ -554,7 +582,10 @@ static int run_one(pid_t pid, intptr_t system_root,
     elevated.attrs |= UINT64_C(0x80);
     cred_changed = 1;
     if ((error = set_credentials(pid, stopped.ucred, &elevated))) {
-        if (set_credentials(pid, stopped.ucred, &original)) goto held;
+        if (set_credentials(pid, stopped.ucred, &original)) {
+            if (original_target_gone(pid, before.proc)) goto target_gone;
+            goto held;
+        }
         cred_changed = 0;
         goto done;
     }
@@ -579,13 +610,35 @@ static int run_one(pid_t pid, intptr_t system_root,
         error = EPROTO; goto rollback;
     }
     if ((error = stop_child(&second, system_root))) goto rollback;
-    if ((error = snapshot(pid, &confirmed)) ||
-        !same_stop(&stopped, &confirmed)) {
-        error = EBUSY; goto rollback;
+    int snapshot_error = snapshot(pid, &confirmed);
+    if (snapshot_error || !same_stop(&stopped, &confirmed)) {
+        ps5log_printf(PS5LOG_ERR,
+                      "target_drift build=%s pid=%d snapshot_error=%d proc_same=%d fd_same=%d cred_same=%d prison_same=%d root_same=%d jail_same=%d cwd_same=%d threads_same=%d fd_refs=%u cred_refs=%u cred_refs_before=%u threads=%u threads_before=%u suspended=%u suspended_before=%u",
+                      LAPY_OWNED_ID, pid, snapshot_error,
+                      !snapshot_error && confirmed.proc == stopped.proc,
+                      !snapshot_error && confirmed.fd == stopped.fd,
+                      !snapshot_error && confirmed.ucred == stopped.ucred,
+                      !snapshot_error && confirmed.prison == stopped.prison,
+                      !snapshot_error && confirmed.root == stopped.root,
+                      !snapshot_error && confirmed.jail == stopped.jail,
+                      !snapshot_error && confirmed.cwd == stopped.cwd,
+                      !snapshot_error && confirmed.count == stopped.count &&
+                          !memcmp(confirmed.threads, stopped.threads,
+                                  confirmed.count * sizeof(confirmed.threads[0])),
+                      snapshot_error ? 0 : confirmed.fd_refs,
+                      snapshot_error ? 0 : confirmed.cred_refs,
+                      stopped.cred_refs,
+                      snapshot_error ? 0 : confirmed.count,
+                      stopped.count,
+                      snapshot_error ? 0 : confirmed.suspended,
+                      stopped.suspended);
+        error = snapshot_error ? snapshot_error : EBUSY;
+        goto rollback;
     }
     if ((error = sample_root(system_root, "donors_ready", &sample)))
         goto rollback;
     stage = "root_transfer";
+    roots_touched = 1;
     enum lapy_replace_result result = lapy_replace_two_roots(
         &io, first.fd + KERNEL_OFFSET_FILEDESC_FD_RDIR,
         second.fd + KERNEL_OFFSET_FILEDESC_FD_RDIR,
@@ -632,19 +685,42 @@ static int run_one(pid_t pid, intptr_t system_root,
     stage = "complete";
     goto done;
 rollback:
-    if (cred_changed && set_credentials(pid, stopped.ucred, &original))
+    if (!roots_touched && original_target_gone(pid, before.proc))
+        goto target_gone;
+    if (cred_changed && set_credentials(pid, stopped.ucred, &original)) {
+        ps5log_printf(PS5LOG_ERR,
+                      "credential_restore_failed build=%s stage=%s pid=%d original_proc_current=%d",
+                      LAPY_OWNED_ID, stage, pid,
+                      kernel_get_proc(pid) == before.proc);
+        if (!roots_touched && original_target_gone(pid, before.proc))
+            goto target_gone;
         goto held;
+    }
     cred_changed = 0;
 done:
     if (attached) {
-        if (!stopped_target) goto held;
-        if (ptrace(PT_DETACH, pid, (caddr_t)1, 0)) goto held;
+        if (!stopped_target) {
+            if (!roots_touched && original_target_gone(pid, before.proc))
+                goto target_gone;
+            goto held;
+        }
+        if (ptrace(PT_DETACH, pid, (caddr_t)1, 0)) {
+            if (!roots_touched && original_target_gone(pid, before.proc))
+                goto target_gone;
+            goto held;
+        }
         attached = 0;
         detached = 1;
         kill(pid, SIGCONT);
     }
-    cleanup_child(&second);
-    cleanup_child(&first);
+    {
+        int second_error = cleanup_child(&second);
+        int first_error = cleanup_child(&first);
+        if (second_error || first_error) {
+            error = second_error ? second_error : first_error;
+            goto held;
+        }
+    }
     if (auth_changed &&
         (kernel_set_ucred_authid(getpid(), self_authid) ||
          kernel_get_ucred_authid(getpid()) != self_authid))
@@ -654,6 +730,15 @@ done:
                   LAPY_OWNED_ID, stage, error, pid, moved, cred_changed,
                   detached, first.reaped && second.reaped);
     return error ? error : 0;
+target_gone:
+    if (roots_touched) goto held;
+    ps5log_printf(PS5LOG_MARK,
+                  "target_gone_pretransfer build=%s stage=%s pid=%d roots_touched=0",
+                  LAPY_OWNED_ID, stage, pid);
+    error = ESRCH;
+    attached = 0;
+    cred_changed = 0;
+    goto done;
 held:
     ps5log_printf(PS5LOG_ERR,
                   "daemon_held build=%s stage=%s error=%d pid=%d attached=%d target_stopped=%d roots_moved=%d first_pid=%d second_pid=%d",
@@ -765,12 +850,16 @@ int main(void)
         error = run_one(pid, root, &baseline,
                         thread_credential_offset);
         if (path[0] && !unlink(path)) acknowledged = 1;
+        else if (error == ESRCH && errno == ENOENT) acknowledged = 1;
         else if (!error) error = errno ? errno : EIO;
         ps5log_printf(error ? PS5LOG_ERR : PS5LOG_MARK,
                       "service_request build=%s pid=%d completed=%u error=%d acknowledged=%d",
                       LAPY_OWNED_ID, pid, completed, error, acknowledged);
         if (!acknowledged) goto done;
-        if (error == EBUSY) { error = 0; continue; }
+        if (error == EBUSY || error == ESRCH) {
+            error = 0;
+            continue;
+        }
         if (error) goto done;
         ++completed;
 #if LAPY_REQUIRE_CLIENT_RESULT
