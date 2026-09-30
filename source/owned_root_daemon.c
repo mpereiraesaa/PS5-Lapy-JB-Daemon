@@ -514,14 +514,38 @@ static int await_target_stop(pid_t pid, const struct snapshot *before,
 
 /* A traced title can be killed by its launcher while we prepare donors.
  * Only loss of the original proc identity proves that its credentials and
- * ptrace attachment no longer need restoring. Never use this after touching
- * root slots: their ownership would then need separate proof. */
+ * ptrace attachment no longer need restoring. Root transfer additionally
+ * needs proof that both donors exited and the root counts settled. */
 static int original_target_gone(pid_t pid, intptr_t original_proc)
 {
     for (unsigned i = 0; i < 20; ++i) {
         if (kernel_get_proc(pid) != original_proc) {
             usleep(10000);
             if (kernel_get_proc(pid) != original_proc) return 1;
+        }
+        usleep(50000);
+    }
+    return 0;
+}
+
+static int transferred_target_gone(pid_t pid, intptr_t original_proc,
+                                   const struct child *first,
+                                   const struct child *second,
+                                   intptr_t system_root,
+                                   const struct counts *baseline)
+{
+    struct counts current;
+    if (!first->reaped || !second->reaped ||
+        !original_target_gone(pid, original_proc)) return 0;
+    for (unsigned i = 0; i < 20; ++i) {
+        if (!read_root_counts(system_root, &current) &&
+            current.hold == baseline->hold &&
+            current.use == baseline->use) {
+            usleep(50000);
+            if (kernel_get_proc(pid) != original_proc &&
+                !read_root_counts(system_root, &current) &&
+                current.hold == baseline->hold &&
+                current.use == baseline->use) return 1;
         }
         usleep(50000);
     }
@@ -695,7 +719,19 @@ static int run_one(pid_t pid, intptr_t system_root,
                   sample.use == baseline->use + 2);
     stage = "detach";
     if (ptrace(PT_DETACH, pid, (caddr_t)1, 0)) {
-        error = errno ? errno : EIO; goto held;
+        error = errno ? errno : EIO;
+        if (transferred_target_gone(pid, before.proc, &first, &second,
+                                    system_root, baseline)) {
+            ps5log_printf(PS5LOG_MARK,
+                          "target_gone_posttransfer build=%s pid=%d detach_error=%d donors_reaped=1 root_balanced=1",
+                          LAPY_OWNED_ID, pid, error);
+            attached = 0;
+            cred_changed = 0;
+            stage = "target_gone_posttransfer";
+            error = ESRCH;
+            goto done;
+        }
+        goto held;
     }
     attached = 0;
     detached = 1;
