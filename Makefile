@@ -3,10 +3,11 @@
 PYTHON ?= python3
 HOST_CC ?= cc
 LOGGING_CLIENT ?= ../logging_server/client
+TARGET_TITLE ?= PPSA99995
 export PS5_PAYLOAD_SDK
 export PS5_CXXRT
 
-.PHONY: all owned-service owned-one-shot legacy check check-native native-components
+.PHONY: all owned-service owned-one-shot owned-helper legacy check check-native native-components
 all: owned-service
 
 owned-service:
@@ -16,6 +17,10 @@ owned-service:
 owned-one-shot:
 	test -n "$(PS5_PAYLOAD_SDK)"
 	$(PYTHON) tools/build_owned_daemon.py --sdk "$(PS5_PAYLOAD_SDK)" --logging-client "$(LOGGING_CLIENT)"
+
+owned-helper:
+	test -n "$(PS5_PAYLOAD_SDK)"
+	$(PYTHON) tools/build_owned_daemon.py --sdk "$(PS5_PAYLOAD_SDK)" --logging-client "$(LOGGING_CLIENT)" --elf-helper --title "$(TARGET_TITLE)"
 
 legacy:
 	$(PYTHON) tools/build.py --legacy --fetch-deps
