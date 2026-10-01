@@ -84,3 +84,30 @@ concurrent daemons and
 unusual exit or exec paths are not established by these trials. Historical
 source research is in [ELEVATION.md](docs/ELEVATION.md). License terms are in
 [LICENSE](LICENSE).
+
+## One-shot elfldr helper
+
+For a homebrew that already owns its startup flow, the same transaction can
+run as a one-request ELF helper instead of a resident daemon. The caller sends
+this ELF to the local elfldr listener on port 9021 and holds the connection
+open for the versioned prepare/result exchange. It must call
+`seteuid(geteuid())` in the target process after the helper's prepare message;
+the helper validates the exact title and PID before applying the existing
+owned-root transaction. The helper exits after its response. This mode still
+requires the caller-side protocol implementation and is built for one exact
+title ID.
+
+Build the helper and its release manifests with:
+
+```sh
+PS5_PAYLOAD_SDK=/path/to/ps5-payload-sdk \
+  make owned-helper TARGET_TITLE=PPSA99995
+```
+
+The output is `build/owned_root_helper-PPSA99995/lapy.elf`. The directory also
+contains `manifest.json` for local build records and `lapy-manifest.json` for
+publishing alongside `lapy.elf` as release assets. The manifest records the
+ELF and shared protocol hashes, target title, and build mode. Consumers should
+reject assets whose title, ELF digest, or protocol digest does not match.
+This helper mode has not been validated on-console; the existing validation
+figures above apply to the resident-daemon mode only.

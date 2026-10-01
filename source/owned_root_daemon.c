@@ -5,6 +5,7 @@
 #include "ps5log.h"
 #include "owned_identity.h"
 #include "donor_transaction.h"
+#include "lapy_elevation_protocol.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -34,6 +35,9 @@ extern intptr_t kernel_get_ucred_prison(pid_t pid);
 #endif
 #ifndef LAPY_MAX_REQUESTS
 #define LAPY_MAX_REQUESTS 0
+#endif
+#ifndef LAPY_ELF_HELPER
+#define LAPY_ELF_HELPER 0
 #endif
 #define TITLE_PREFIX TARGET_TITLE "_"
 #define SANDBOX_BASE "/mnt/sandbox"
@@ -185,6 +189,7 @@ static int private_process_credential(const struct snapshot *state,
            thread_credential == state->ucred;
 }
 
+#if !LAPY_ELF_HELPER
 static pid_t parse_pid(const char *message)
 {
     const char *p = strstr(message, "\"PID\"");
@@ -274,6 +279,7 @@ static int await_client_result(const char *path)
     return ETIMEDOUT;
 }
 #endif
+#endif /* !LAPY_ELF_HELPER */
 
 static void donor_release_signal(int signal_number)
 {
@@ -514,14 +520,38 @@ static int await_target_stop(pid_t pid, const struct snapshot *before,
 
 /* A traced title can be killed by its launcher while we prepare donors.
  * Only loss of the original proc identity proves that its credentials and
- * ptrace attachment no longer need restoring. Never use this after touching
- * root slots: their ownership would then need separate proof. */
+ * ptrace attachment no longer need restoring. Root transfer additionally
+ * needs proof that both donors exited and the root counts settled. */
 static int original_target_gone(pid_t pid, intptr_t original_proc)
 {
     for (unsigned i = 0; i < 20; ++i) {
         if (kernel_get_proc(pid) != original_proc) {
             usleep(10000);
             if (kernel_get_proc(pid) != original_proc) return 1;
+        }
+        usleep(50000);
+    }
+    return 0;
+}
+
+static int transferred_target_gone(pid_t pid, intptr_t original_proc,
+                                   const struct child *first,
+                                   const struct child *second,
+                                   intptr_t system_root,
+                                   const struct counts *baseline)
+{
+    struct counts current;
+    if (!first->reaped || !second->reaped ||
+        !original_target_gone(pid, original_proc)) return 0;
+    for (unsigned i = 0; i < 20; ++i) {
+        if (!read_root_counts(system_root, &current) &&
+            current.hold == baseline->hold &&
+            current.use == baseline->use) {
+            usleep(50000);
+            if (kernel_get_proc(pid) != original_proc &&
+                !read_root_counts(system_root, &current) &&
+                current.hold == baseline->hold &&
+                current.use == baseline->use) return 1;
         }
         usleep(50000);
     }
@@ -695,7 +725,19 @@ static int run_one(pid_t pid, intptr_t system_root,
                   sample.use == baseline->use + 2);
     stage = "detach";
     if (ptrace(PT_DETACH, pid, (caddr_t)1, 0)) {
-        error = errno ? errno : EIO; goto held;
+        error = errno ? errno : EIO;
+        if (transferred_target_gone(pid, before.proc, &first, &second,
+                                    system_root, baseline)) {
+            ps5log_printf(PS5LOG_MARK,
+                          "target_gone_posttransfer build=%s pid=%d detach_error=%d donors_reaped=1 root_balanced=1",
+                          LAPY_OWNED_ID, pid, error);
+            attached = 0;
+            cred_changed = 0;
+            stage = "target_gone_posttransfer";
+            error = ESRCH;
+            goto done;
+        }
+        goto held;
     }
     attached = 0;
     detached = 1;
@@ -765,14 +807,130 @@ held:
     for (;;) sleep(1);
 }
 
+#if LAPY_ELF_HELPER
+struct helper_app_info {
+    uint32_t app_id;
+    uint64_t unknown1;
+    char title_id[14];
+    char unknown2[0x3c];
+};
+extern int sceKernelGetAppInfo(pid_t pid, struct helper_app_info *info);
+
+static int helper_transfer(int fd, void *buffer, size_t size, int writing)
+{
+    unsigned char *bytes = buffer;
+    while (size) {
+        ssize_t count = writing ? write(fd, bytes, size) : read(fd, bytes, size);
+        if (count <= 0 || (size_t)count > size) return EIO;
+        bytes += count;
+        size -= (size_t)count;
+    }
+    return 0;
+}
+
+static int helper_message_matches(const struct lapy_elevation_message *message,
+                                  const struct lapy_elevation_message *request,
+                                  uint32_t kind)
+{
+    return message->magic == LAPY_ELEVATION_MAGIC &&
+           message->version == LAPY_ELEVATION_VERSION &&
+           message->size == sizeof(*message) && message->kind == kind &&
+           message->capability == request->capability &&
+           message->pid == request->pid;
+}
+
+static int helper_target_title_matches(pid_t pid)
+{
+    struct helper_app_info info;
+    memset(&info, 0, sizeof(info));
+    return sceKernelGetAppInfo(pid, &info) == 0 &&
+           !memcmp(info.title_id, TARGET_TITLE, sizeof(TARGET_TITLE));
+}
+
+static uint32_t helper_status_for_error(int error)
+{
+    if (error == ESRCH) return LAPY_ELEVATION_TARGET_MISMATCH;
+    if (error == EFAULT || error == ENOTSUP) return LAPY_ELEVATION_UNAVAILABLE;
+    return LAPY_ELEVATION_APPLY_FAILED;
+}
+
+static int run_helper_request(intptr_t root,
+                              size_t thread_credential_offset)
+{
+    struct lapy_elevation_message request = {0}, prepare, prepared = {0};
+    struct lapy_elevation_message response = {0};
+    struct counts baseline;
+    int error = helper_transfer(STDIN_FILENO, &request, sizeof(request), 0);
+    uint32_t status = LAPY_ELEVATION_OK;
+
+    if (error) return 1;
+    if (request.magic != LAPY_ELEVATION_MAGIC ||
+        request.size != sizeof(request))
+        status = LAPY_ELEVATION_INVALID_REQUEST;
+    else if (request.version != LAPY_ELEVATION_VERSION)
+        status = LAPY_ELEVATION_UNSUPPORTED_VERSION;
+    else if (request.kind != LAPY_ELEVATION_REQUEST || request.pid <= 1 ||
+             request.capability != LAPY_ELEVATION_FILESYSTEM || request.status)
+        status = LAPY_ELEVATION_UNSUPPORTED_CAPABILITY;
+    else if (!helper_target_title_matches((pid_t)request.pid))
+        status = LAPY_ELEVATION_TARGET_MISMATCH;
+
+    if (status != LAPY_ELEVATION_OK) goto respond;
+    prepare = request;
+    prepare.kind = LAPY_ELEVATION_PREPARE;
+    prepare.status = LAPY_ELEVATION_OK;
+    if ((error = helper_transfer(STDOUT_FILENO, &prepare, sizeof(prepare), 1)))
+        return 1;
+
+    if ((error = helper_transfer(STDIN_FILENO, &prepared, sizeof(prepared), 0))) {
+        status = LAPY_ELEVATION_TRANSPORT_ERROR;
+        goto respond;
+    }
+    if (!helper_message_matches(&prepared, &request, LAPY_ELEVATION_PREPARED)) {
+        status = LAPY_ELEVATION_PROTOCOL_ERROR;
+        goto respond;
+    }
+    if (prepared.status != LAPY_ELEVATION_OK) {
+        status = LAPY_ELEVATION_PREPARE_FAILED;
+        goto respond;
+    }
+    /* Recheck the PID/title after the cooperative credential clone. */
+    if (!helper_target_title_matches((pid_t)request.pid)) {
+        status = LAPY_ELEVATION_TARGET_MISMATCH;
+        goto respond;
+    }
+    if ((error = sample_root(root, "helper_before", &baseline))) {
+        status = LAPY_ELEVATION_UNAVAILABLE;
+        goto respond;
+    }
+    error = run_one((pid_t)request.pid, root, &baseline,
+                    thread_credential_offset);
+    status = error ? helper_status_for_error(error) : LAPY_ELEVATION_OK;
+
+respond:
+    response = request;
+    response.kind = LAPY_ELEVATION_RESPONSE;
+    response.status = status;
+    if (helper_transfer(STDOUT_FILENO, &response, sizeof(response), 1))
+        return 1;
+    return status == LAPY_ELEVATION_OK ? 0 : 1;
+}
+#endif
+
 int main(void)
 {
+#if !LAPY_ELF_HELPER
     char path[512] = {0};
+#endif
 #if !LAPY_SERVICE || LAPY_REQUIRE_CLIENT_RESULT
+#if !LAPY_ELF_HELPER
     char result_path[512] = {0};
 #endif
+#endif
     pid_t pid = -1;
+#if !LAPY_ELF_HELPER
     time_t started = time(NULL);
+#endif
     intptr_t root = 0;
     struct snapshot self;
     struct counts baseline = {0}, final = {0};
@@ -780,8 +938,10 @@ int main(void)
     size_t thread_credential_offset = 0;
     int error = 0, acknowledged = 0;
     const char *stage = "preflight";
-    if (ps5log_init_default("LAPYOWN", "lapy-owned-root-daemon"))
-        return 2;
+    int logging_ready = ps5log_init_default("LAPYOWN", "lapy-owned-root-daemon") == 0;
+#if !LAPY_ELF_HELPER
+    if (!logging_ready) return 2;
+#endif
     ps5log_printf(PS5LOG_MARK,
                   "daemon_start build=%s firmware=%08x title=%s service=%d require_client_result=%d max_requests=%d",
                   LAPY_OWNED_ID, kernel_get_fw_version(), TARGET_TITLE,
@@ -848,7 +1008,10 @@ int main(void)
     stage = "root_layout";
     if ((error = validate_root_reference_layout(root, self.fd)))
         goto done;
-#if LAPY_SERVICE
+#if LAPY_ELF_HELPER
+    stage = "helper_request";
+    error = run_helper_request(root, thread_credential_offset) ? EIO : 0;
+#elif LAPY_SERVICE
     for (unsigned completed = 0;;) {
         path[0] = 0;
         pid = -1;
@@ -936,6 +1099,7 @@ done:
                   LAPY_OWNED_ID, stage, error, pid, acknowledged,
                   !error && final.hold == baseline.hold &&
                   final.use == baseline.use);
-    ps5log_close(error ? "daemon-failed" : "daemon-complete");
+    if (logging_ready)
+        ps5log_close(error ? "daemon-failed" : "daemon-complete");
     return error ? 1 : 0;
 }
