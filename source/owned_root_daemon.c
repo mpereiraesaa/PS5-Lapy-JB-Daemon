@@ -6,6 +6,7 @@
 #include "owned_identity.h"
 #include "donor_transaction.h"
 #include "lapy_elevation_protocol.h"
+#include "vnode_ref_probe.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -54,6 +55,8 @@ extern intptr_t kernel_get_ucred_prison(pid_t pid);
 #define UCRED_REF 0x00u
 #define UCRED_NGROUPS 0x10u
 #define MAX_THREADS 256u
+#define ROOT_LAYOUT_MAX_ATTEMPTS 3u
+#define ROOT_LAYOUT_RETRY_DELAY_US 100000u
 #define PTRACE_AUTHID UINT64_C(0x4800000000010003)
 #define SYSTEM_AUTHID UINT64_C(0x4801000000000013)
 
@@ -69,8 +72,6 @@ struct snapshot {
     unsigned count, suspended;
     uint32_t fd_refs, cred_refs;
 };
-
-struct counts { uint32_t hold, use; };
 
 struct credentials {
     uid_t uid, ruid, svuid;
@@ -92,7 +93,8 @@ static int write_ptr(void *unused, intptr_t address, intptr_t value)
     return kernel_copyin(&value, address, sizeof(value)) ? EFAULT : 0;
 }
 
-static int read_root_counts(intptr_t root, struct counts *out)
+static int read_root_counts(intptr_t root,
+                            struct lapy_vnode_ref_counts *out)
 {
     if (kernel_copyout(root + ROOT_HOLD, &out->hold, sizeof(out->hold)) ||
         kernel_copyout(root + ROOT_USE, &out->use, sizeof(out->use)))
@@ -100,7 +102,8 @@ static int read_root_counts(intptr_t root, struct counts *out)
     return 0;
 }
 
-static int sample_root(intptr_t root, const char *phase, struct counts *out)
+static int sample_root(intptr_t root, const char *phase,
+                       struct lapy_vnode_ref_counts *out)
 {
     int error = read_root_counts(root, out);
     if (error) return error;
@@ -391,11 +394,15 @@ static int cleanup_child(struct child *self)
 /* The SDK resolves rootvnode per firmware, but does not expose these vnode
  * counter offsets. Check the assumed layout using a disposable native
  * RFPROC|RFFDG child before any target credential or directory write. */
-static int validate_root_reference_layout(intptr_t root, intptr_t self_fd)
+static int validate_root_reference_layout_once(intptr_t root,
+                                               intptr_t self_fd,
+                                               unsigned attempt,
+                                               int *retryable)
 {
     struct child donor = {.pid = -1};
     struct snapshot observed;
-    struct counts before = {0}, during = {0}, after = {0};
+    struct lapy_vnode_ref_counts before = {0}, during = {0}, after = {0};
+    *retryable = 0;
     int error = sample_root(root, "layout_before", &before);
     if (error) return error;
     if (!before.hold || !before.use ||
@@ -409,22 +416,63 @@ static int validate_root_reference_layout(intptr_t root, intptr_t self_fd)
         error = EPROTO; goto done;
     }
     if ((error = sample_root(root, "layout_donor", &during))) goto done;
-    if (during.hold != before.hold + 2 ||
-        during.use != before.use + 2) {
-        error = EPROTO; goto done;
-    }
-    if ((error = release_child(&donor))) goto done;
-    if ((error = sample_root(root, "layout_released", &after))) goto done;
-    if (after.hold != before.hold || after.use != before.use)
+    if (!lapy_vnode_ref_probe_added_two(&before, &during)) {
+        /* The counters are global. A concurrent vnode release can hide the
+         * donor's +2 even when its private filedesc snapshot is correct. */
         error = EPROTO;
+        *retryable = 1;
+    }
+    if ((error = release_child(&donor))) {
+        *retryable = 0;
+        goto done;
+    }
+    if ((error = sample_root(root, "layout_released", &after))) {
+        *retryable = 0;
+        goto done;
+    }
+    if (!lapy_vnode_ref_probe_returned_to_baseline(&before, &after)) {
+        error = EPROTO;
+        *retryable = 1;
+    } else if (!*retryable) {
+        error = 0;
+    }
 done:
     {
         int cleanup_error = cleanup_child(&donor);
-        if (!error) error = cleanup_error;
+        if (cleanup_error) {
+            error = cleanup_error;
+            *retryable = 0;
+        }
     }
     ps5log_printf(error ? PS5LOG_ERR : PS5LOG_MARK,
-                  "root_layout build=%s valid=%d error=%d",
-                  LAPY_OWNED_ID, error == 0, error);
+                  "root_layout_probe build=%s attempt=%u valid=%d error=%d retryable=%d before_hold=%u before_use=%u donor_hold=%u donor_use=%u released_hold=%u released_use=%u",
+                  LAPY_OWNED_ID, attempt, error == 0, error, *retryable,
+                  before.hold, before.use, during.hold, during.use,
+                  after.hold, after.use);
+    return error;
+}
+
+static int validate_root_reference_layout(intptr_t root, intptr_t self_fd)
+{
+    unsigned attempts = 0;
+    int error = EPROTO;
+    for (unsigned attempt = 1; attempt <= ROOT_LAYOUT_MAX_ATTEMPTS;
+         ++attempt) {
+        int retryable = 0;
+        attempts = attempt;
+        error = validate_root_reference_layout_once(root, self_fd, attempt,
+                                                     &retryable);
+        if (!error || !retryable)
+            break;
+        ps5log_printf(PS5LOG_MARK,
+                      "root_layout_retry build=%s attempt=%u next=%u error=%d",
+                      LAPY_OWNED_ID, attempt, attempt + 1, error);
+        if (attempt < ROOT_LAYOUT_MAX_ATTEMPTS)
+            usleep(ROOT_LAYOUT_RETRY_DELAY_US);
+    }
+    ps5log_printf(error ? PS5LOG_ERR : PS5LOG_MARK,
+                  "root_layout build=%s valid=%d error=%d attempts=%u",
+                  LAPY_OWNED_ID, error == 0, error, attempts);
     return error;
 }
 
@@ -538,9 +586,9 @@ static int transferred_target_gone(pid_t pid, intptr_t original_proc,
                                    const struct child *first,
                                    const struct child *second,
                                    intptr_t system_root,
-                                   const struct counts *baseline)
+                                   const struct lapy_vnode_ref_counts *baseline)
 {
-    struct counts current;
+    struct lapy_vnode_ref_counts current;
     if (!first->reaped || !second->reaped ||
         !original_target_gone(pid, original_proc)) return 0;
     for (unsigned i = 0; i < 20; ++i) {
@@ -559,7 +607,7 @@ static int transferred_target_gone(pid_t pid, intptr_t original_proc,
 }
 
 static int run_one(pid_t pid, intptr_t system_root,
-                   const struct counts *baseline,
+                   const struct lapy_vnode_ref_counts *baseline,
                    size_t thread_credential_offset)
 {
     struct child first = {.pid = -1};
@@ -567,7 +615,7 @@ static int run_one(pid_t pid, intptr_t system_root,
     struct snapshot before, stopped, confirmed, donor;
     struct credentials original, elevated;
     struct lapy_slot_io io = {read_ptr, write_ptr, 0};
-    struct counts sample;
+    struct lapy_vnode_ref_counts sample;
     uint64_t self_authid = 0;
     int error = 0, attached = 0, stopped_target = 0;
     int auth_changed = 0, cred_changed = 0, moved = 0, detached = 0;
@@ -859,7 +907,7 @@ static int run_helper_request(intptr_t root,
 {
     struct lapy_elevation_message request = {0}, prepare, prepared = {0};
     struct lapy_elevation_message response = {0};
-    struct counts baseline;
+    struct lapy_vnode_ref_counts baseline;
     int error = helper_transfer(STDIN_FILENO, &request, sizeof(request), 0);
     uint32_t status = LAPY_ELEVATION_OK;
 
@@ -933,7 +981,7 @@ int main(void)
 #endif
     intptr_t root = 0;
     struct snapshot self;
-    struct counts baseline = {0}, final = {0};
+    struct lapy_vnode_ref_counts baseline = {0}, final = {0};
     intptr_t self_cred_before = 0;
     size_t thread_credential_offset = 0;
     int error = 0, acknowledged = 0;
