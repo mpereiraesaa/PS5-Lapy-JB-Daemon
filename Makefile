@@ -41,6 +41,8 @@ check-native:
 	./build/host/test_donor_transaction
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -g -fsanitize=address,undefined -Isource source/filedesc_refcount.c tests/test_filedesc_refcount.c -o build/host/test_filedesc_refcount
 	./build/host/test_filedesc_refcount
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -g -fsanitize=address,undefined -Isource source/vnode_ref_probe.c tests/test_vnode_ref_probe.c -o build/host/test_vnode_ref_probe
+	./build/host/test_vnode_ref_probe
 
 # Compile the transport component only; this is not an elevation payload.
 native-components:

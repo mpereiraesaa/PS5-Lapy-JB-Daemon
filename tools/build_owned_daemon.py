@@ -11,7 +11,8 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCES = ("owned_root_daemon.c", "donor_transaction.c",
-           "donor_transaction.h", "lapy_elevation_protocol.h")
+           "vnode_ref_probe.c", "donor_transaction.h",
+           "vnode_ref_probe.h", "lapy_elevation_protocol.h")
 
 
 def digest(path):
@@ -85,7 +86,7 @@ def main():
     elf.unlink(missing_ok=True)
     command = [str(sdk / "bin/prospero-clang"), *flags, "-I" + str(logging),
                "-I" + str(output), "-I" + str(ROOT / "source"),
-               str(paths[0]), str(paths[1]), "-o", str(elf)]
+               str(paths[0]), str(paths[1]), str(paths[2]), "-o", str(elf)]
     with (output / "build.log").open("w") as log:
         log.write(json.dumps(command) + "\n")
         log.flush()
@@ -114,6 +115,7 @@ def main():
             "target_title", "mode", "max_requests", "service",
             "require_client_result", "console_validated", "elf_sha256",
             "protocol_sha256")}
+        release_manifest["features"] = ["root_layout_probe_retry"]
         (output / "lapy-manifest.json").write_text(
             json.dumps(release_manifest, indent=2, sort_keys=True) + "\n")
     print(f"Built {elf.relative_to(ROOT)}\nmode={mode}\nbuild_id={identity}\n"

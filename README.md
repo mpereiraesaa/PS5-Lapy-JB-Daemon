@@ -106,8 +106,14 @@ PS5_PAYLOAD_SDK=/path/to/ps5-payload-sdk \
 
 The output is `build/owned_root_helper-PPSA99995/lapy.elf`. The directory also
 contains `manifest.json` for local build records and `lapy-manifest.json` for
-publishing alongside `lapy.elf` as release assets. The manifest records the
-ELF and shared protocol hashes, target title, and build mode. Consumers should
-reject assets whose title, ELF digest, or protocol digest does not match.
-This helper mode has not been validated on-console; the existing validation
-figures above apply to the resident-daemon mode only.
+publishing alongside `lapy.elf` as release assets. The release manifest
+records the ELF and shared protocol hashes, target title, build mode, and the
+`root_layout_probe_retry` feature. Consumers should reject assets missing
+that feature or whose title, ELF digest, or protocol digest does not match.
+
+On one FW 12.02 console, the helper builds with this feature completed 32/32
+elevation attempts for PPSA99995, including 30 consecutive launcher
+launch/close cycles. Every attempt reported balanced root counters and the
+title confirmed `/data` access. In one of the 20 most recent cycles, an
+inconclusive first counter probe retried once and then completed successfully.
+Other firmware versions and titles remain unvalidated.
