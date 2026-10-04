@@ -9,13 +9,17 @@ title's two old root/jail references into the donor filedescs. Native donor
 exit releases the old references. The title owns the system-root references
 until its own exit or exec cleanup releases them.
 
-Donor readiness uses a pipe-free handshake. Each child installs a `SIGUSR1`
-exit handler, calls `kill(getpid(), SIGSTOP)`, and waits. The parent receives
-the stop through `waitpid(WUNTRACED)`, resumes the child, verifies its live
-process state, and later sends `SIGUSR1` to release it. The parent still uses
-`SIGSTOP` to quiesce donors during the root transfer. On FW 12.02,
-`raise(SIGSTOP)` returned an error in a disposable probe, so the child uses
-the native `kill` route. Any unexpected child state or timeout fails closed.
+Donor readiness uses a pipe-free handshake. Each child calls
+`kill(getpid(), SIGSTOP)` and waits. The parent receives the stop through
+`waitpid(WUNTRACED)`, resumes the child, verifies its live process state, and
+later sends `SIGKILL` and accepts only that exact termination status. Native
+process teardown closes the private donor filedesc and releases its directory
+references. The parent still uses `SIGSTOP` to quiesce donors
+during the root transfer. On FW 12.02, `raise(SIGSTOP)` returned an error in a
+disposable probe, so the child uses the native `kill` route. An intermediate
+`SIGUSR1` exit handler faulted during payload signal delivery on FW 6.02;
+`SIGKILL` requires no user-space signal trampoline. Any unexpected child state
+or timeout fails closed.
 
 A title must prepare its credential **before** writing the
 `/download0/elevate_proc` request. This is a protocol change from legacy Lapy;
