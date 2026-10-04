@@ -2,11 +2,13 @@
 
 This fork provides a resident elevation daemon for PS5 firmware supported by
 the payload SDK. It is intended for homebrew that repeatedly launches processes
-needing `/data` access, such as a launcher starting games. **Only firmware
-12.02 has been validated on a console.** Other versions are experimental: the
-daemon checks its assumed kernel layout with native `getgroups` and a
-disposable child before changing a target, and refuses to proceed if the
-checks fail. The old backend
+needing `/data` access, such as a launcher starting games. The resident service
+has been validated on firmware 12.02. The one-shot helper's donor lifecycle has
+also been exercised in an integrated caller on firmware 6.02 and 12.70; see
+[Validation and limits](#validation-and-limits). Other versions are
+experimental: the daemon checks its assumed kernel layout with native
+`getgroups` and a disposable child before changing a target, and refuses to
+proceed if the checks fail. The old backend
 is available only through the explicit `make legacy` target.
 
 Legacy Lapy directly overwrites a process's root and jail pointers. Repeated
@@ -84,6 +86,19 @@ concurrent daemons and
 unusual exit or exec paths are not established by these trials. Historical
 source research is in [ELEVATION.md](docs/ELEVATION.md). License terms are in
 [LICENSE](LICENSE).
+
+The `SIGKILL` donor-release one-shot helper was additionally tested through an
+integrated exact-title caller for **5/5 cycles on FW 6.02** and **5/5 cycles on
+FW 12.70**. Every cycle reported successful `/data` access as root,
+`donors_reaped=1`, and `donor_balance expected_two=1`; the helper exited
+normally and the captured kernel-log windows contained no fatal signal, app
+crash, coredump, nonsleeping-lock warning, or kernel panic. The tested helper
+had build ID
+`70c935c0b1c28730eee3fff49d6d9dc0978ee68842d15edeafbd49d4b33de318`
+and SHA-256
+`cac3987ef3c25e9fccbb2c5aca94fab106f91c16828ae5d91048718dde610379`.
+This qualifies that exact one-shot integration; it does not turn every SDK-
+supported firmware or caller lifecycle into a supported configuration.
 
 ## One-shot elfldr helper
 

@@ -143,6 +143,22 @@ future daemon must find a separately validated native target-clone method.
 The payload-side `PT_READ_I` and `PT_IO` attempts did not return usable target
 code bytes on this firmware, so they are not used for target cloning here.
 
+The `SIGKILL` donor-release helper was later qualified in one exact-title
+one-shot integration on FW 6.02 (`06020004`) and FW 12.70 (`12700001`). The
+same ELF (build ID
+`70c935c0b1c28730eee3fff49d6d9dc0978ee68842d15edeafbd49d4b33de318`,
+SHA-256
+`cac3987ef3c25e9fccbb2c5aca94fab106f91c16828ae5d91048718dde610379`)
+completed five launch/elevate/close cycles on each console. All ten requests
+reported `stage=complete error=0`, `donors_reaped=1`, and
+`donor_balance expected_two=1`; the callers independently proved `/data`
+read/write access with uid/gid `0/0`. Each helper emitted
+`reason=daemon-complete`, its payload exited normally, and the captured kernel
+log windows had no fatal signal, app crash, coredump, nonsleeping-lock warning,
+or kernel panic. The console services remained responsive after each cycle.
+This validates the corrected donor release on both tested firmware families,
+not every firmware or arbitrary caller behavior.
+
 On a later FW 12.02 boot, the pipe-based resident daemon completed 55
 requests and then failed while starting its second donor. A fresh pipe write
 returned `ENOMEM` even in a standalone parent process before `rfork` or
