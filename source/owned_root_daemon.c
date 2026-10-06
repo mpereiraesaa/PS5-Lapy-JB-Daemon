@@ -285,26 +285,10 @@ static int await_client_result(const char *path)
 #endif
 #endif /* !LAPY_ELF_HELPER */
 
-static void donor_release_signal(int signal_number)
-{
-    (void)signal_number;
-    _exit(0);
-}
-
 static void child_main(void)
 {
-    struct sigaction action;
-    sigset_t release_signal;
-    memset(&action, 0, sizeof(action));
-    action.sa_handler = donor_release_signal;
-    sigemptyset(&action.sa_mask);
-    if (sigaction(SIGUSR1, &action, 0)) _exit(2);
-    sigemptyset(&release_signal);
-    sigaddset(&release_signal, SIGUSR1);
-    if (sigprocmask(SIG_UNBLOCK, &release_signal, 0)) _exit(3);
-    /* waitpid(WUNTRACED) is the readiness acknowledgement. The handler is
-     * installed before this stop, so an early release signal is safe. */
-    if (kill(getpid(), SIGSTOP)) _exit(4);
+    /* waitpid(WUNTRACED) is the readiness acknowledgement. */
+    if (kill(getpid(), SIGSTOP)) _exit(2);
     for (;;) pause();
 }
 
@@ -365,12 +349,16 @@ static int release_child(struct child *self)
         if (kill(self->pid, SIGCONT)) return errno ? errno : EIO;
         self->stopped = 0;
     }
-    if (kill(self->pid, SIGUSR1)) return errno ? errno : EIO;
+    /* Payload signal trampolines are not portable across supported firmware.
+     * SIGKILL keeps release in native process teardown, which closes the
+     * private filedesc and releases its directory references. */
+    if (kill(self->pid, SIGKILL)) return errno ? errno : EIO;
     for (unsigned i = 0; i < 100; ++i) {
         pid_t result = waitpid(self->pid, &status, WNOHANG);
         if (result == self->pid) {
             self->reaped = 1;
-            return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : EPROTO;
+            return WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL ?
+                   0 : EPROTO;
         }
         if (result < 0) return errno ? errno : ECHILD;
         usleep(50000);

@@ -2,11 +2,13 @@
 
 This fork provides a resident elevation daemon for PS5 firmware supported by
 the payload SDK. It is intended for homebrew that repeatedly launches processes
-needing `/data` access, such as a launcher starting games. **Only firmware
-12.02 has been validated on a console.** Other versions are experimental: the
-daemon checks its assumed kernel layout with native `getgroups` and a
-disposable child before changing a target, and refuses to proceed if the
-checks fail. The old backend
+needing `/data` access, such as a launcher starting games. The resident service
+has been validated on firmware 12.02. The one-shot helper's donor lifecycle has
+also been exercised in an integrated caller on firmware 6.02 and 12.70; see
+[Validation and limits](#validation-and-limits). Other versions are
+experimental: the daemon checks its assumed kernel layout with native
+`getgroups` and a disposable child before changing a target, and refuses to
+proceed if the checks fail. The old backend
 is available only through the explicit `make legacy` target.
 
 Legacy Lapy directly overwrites a process's root and jail pointers. Repeated
@@ -17,13 +19,13 @@ roots. It also requires the target to clone its own credentials before the
 request. See [the design and evidence](docs/OWNED_ROOT_DAEMON.md). The crash
 mechanism is strongly suggested by the evidence, but no kernel dump proved it.
 
-Donor startup and release now use process signals and `waitpid`, with no
-per-request pipes. On FW 12.02, a fresh pipe could be created but writing one
-byte to it failed with `ENOMEM` after sustained use; the older daemon then
-lost its donor acknowledgement and exited. The signal-controlled candidate
-completed four cooperative `/data` elevations in that same boot while fresh
-pipe writes still failed. This avoids that immediate failure path; it does not
-identify or repair the kernel's pipe allocation problem.
+Donor startup and release use `SIGSTOP`, `SIGKILL`, and `waitpid`, with no
+per-request pipes or user-space signal handler. On FW 12.02, a fresh pipe could
+be created but writing one byte to it failed with `ENOMEM` after sustained
+use; the older daemon then lost its donor acknowledgement and exited. An
+intermediate `SIGUSR1` exit handler avoided pipes, but its payload children
+faulted during signal delivery on FW 6.02. Native `SIGKILL` teardown avoids
+both firmware-dependent paths while still closing each private donor filedesc.
 
 ## Required cooperation in the homebrew
 
@@ -84,6 +86,19 @@ concurrent daemons and
 unusual exit or exec paths are not established by these trials. Historical
 source research is in [ELEVATION.md](docs/ELEVATION.md). License terms are in
 [LICENSE](LICENSE).
+
+The `SIGKILL` donor-release one-shot helper was additionally tested through an
+integrated exact-title caller for **5/5 cycles on FW 6.02** and **5/5 cycles on
+FW 12.70**. Every cycle reported successful `/data` access as root,
+`donors_reaped=1`, and `donor_balance expected_two=1`; the helper exited
+normally and the captured kernel-log windows contained no fatal signal, app
+crash, coredump, nonsleeping-lock warning, or kernel panic. The tested helper
+had build ID
+`70c935c0b1c28730eee3fff49d6d9dc0978ee68842d15edeafbd49d4b33de318`
+and SHA-256
+`cac3987ef3c25e9fccbb2c5aca94fab106f91c16828ae5d91048718dde610379`.
+This qualifies that exact one-shot integration; it does not turn every SDK-
+supported firmware or caller lifecycle into a supported configuration.
 
 ## One-shot elfldr helper
 
