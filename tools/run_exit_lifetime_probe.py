@@ -84,6 +84,7 @@ def main():
     digest = hashlib.sha256(elf.read_bytes()).hexdigest()
     if manifest["mode"] != "live-title-exit-lifetime-read-only" or \
             manifest["target_title"] != args.title or \
+            not manifest.get("log_server") or \
             manifest["elf_sha256"] != digest:
         parser.error("probe artifact identity mismatch")
 

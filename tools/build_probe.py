@@ -1,6 +1,7 @@
 """Build a bounded PS5 native capability probe; never deploy it."""
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sdk", default=os.environ.get("PS5_PAYLOAD_SDK"), required=not os.environ.get("PS5_PAYLOAD_SDK"))
     parser.add_argument("--logging-client", type=Path, required=True)
+    parser.add_argument("--log-server",
+                        help="embed a dotted-IPv4 ps5log receiver instead of reading dev.conf")
     parser.add_argument("--exclusive-receiver", action="store_true",
                         help="test explicit CLOEXEC setup in this non-execing probe only")
     parser.add_argument("--probe", choices=("transport", "cross-process-directory", "credentials", "vfs", "cross-root", "sysent", "root-refs", "root-native-refs", "kernel-symbols", "filedesc-unshare", "target-dirs", "request-dirs", "donor-filedesc", "null-jail-transfer", "old-root-release", "ptrace-quiescence", "signal-quiescence", "thread-stop-calibration", "live-target-stop", "live-target-ptrace", "debug-retention", "move-only", "retained-cross-process", "retained-two-root", "retained-nonroot", "remote-credential-clone", "self-ptrace-clone", "preentry-log"), default="transport")
@@ -40,6 +43,11 @@ def main():
     parser.add_argument("--cwd-root", action="store_true",
                         help="retain original root as cwd; do not open root/cwd descriptors in cross-root probe")
     args = parser.parse_args()
+    if args.log_server is not None:
+        try:
+            ipaddress.IPv4Address(args.log_server)
+        except ipaddress.AddressValueError:
+            parser.error("--log-server must be a dotted IPv4 address")
     if args.probe != "transport" and args.exclusive_receiver:
         parser.error("--exclusive-receiver requires --probe transport")
     if args.sony_privileges and args.probe != "cross-root":
@@ -138,6 +146,8 @@ def main():
         flags.append("-DLAPY_SCAN_GADGET=1")
     if args.exit_lifetime:
         flags.append("-DLAPY_EXIT_LIFETIME=1")
+    if args.log_server is not None:
+        flags.append(f'-DLAPY_LOG_SERVER="{args.log_server}"')
     identity = hashlib.sha256(json.dumps({"inputs": inputs, "sdk": sdk_inputs,
                                          "flags": flags}, sort_keys=True).encode()).hexdigest()
     stem = {"transport": "native", "credentials": "credential", "vfs": "vfs",
@@ -240,8 +250,9 @@ def main():
                                    "observe_state": args.observe_state if args.probe == "live-target-stop" else None,
                                    "self_stop": args.self_stop if args.probe == "retained-nonroot" else None,
                                    "scan_gadget": args.scan_gadget if args.probe == "live-target-ptrace" else None,
-                                   "exit_lifetime": args.exit_lifetime if args.probe == "live-target-ptrace" else None,
-                                   "console_validated": False}, indent=2, sort_keys=True) + "\n")
+                                    "exit_lifetime": args.exit_lifetime if args.probe == "live-target-ptrace" else None,
+                                    "log_server": args.log_server,
+                                    "console_validated": False}, indent=2, sort_keys=True) + "\n")
     print(f"Built {elf.relative_to(ROOT)}\nbuild_id={identity}\nsha256={sha(elf)}")
 
 

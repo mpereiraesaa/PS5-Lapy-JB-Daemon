@@ -192,6 +192,22 @@ static int same_members(const struct target_snapshot *a,
     return equal;
 }
 
+static int init_probe_log(void)
+{
+#ifdef LAPY_LOG_SERVER
+    ps5log_config config;
+    ps5log_config_defaults(&config);
+    if (snprintf(config.server, sizeof(config.server), "%s",
+                 LAPY_LOG_SERVER) >= (int)sizeof(config.server)) return -1;
+    return ps5log_init(&config, "LAPYTP",
+                       "lapy-live-title-ptrace-retention",
+                       ps5log_monotonic_ns());
+#else
+    return ps5log_init_default("LAPYTP",
+                               "lapy-live-title-ptrace-retention");
+#endif
+}
+
 #if LAPY_EXIT_LIFETIME
 static int reap_killed_target(pid_t pid, unsigned *polls)
 {
@@ -280,7 +296,7 @@ int main(void)
 #endif
     const char *stage = "preflight";
 
-    if (ps5log_init_default("LAPYTP", "lapy-live-title-ptrace-retention"))
+    if (init_probe_log())
         return 2;
     ps5log_printf(PS5LOG_MARK,
                   "probe_start build=%s firmware=%08x mode=%s title=%s scan_gadget=%d max_polls=%u",

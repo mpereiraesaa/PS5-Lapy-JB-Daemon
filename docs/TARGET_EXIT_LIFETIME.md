@@ -19,7 +19,8 @@ Build the exact artifacts under WSL:
 ```sh
 python3 tools/build_probe.py --probe live-target-ptrace --exit-lifetime \
   --target-title PPSA99999 --sdk /opt/ps5-payload-sdk \
-  --logging-client /path/to/logging_server/client
+  --logging-client /path/to/logging_server/client \
+  --log-server 192.168.4.20
 python3 tools/build_exit_lifetime_target.py \
   --boilerplate /path/to/ps5-native-app-boilerplate
 ```
