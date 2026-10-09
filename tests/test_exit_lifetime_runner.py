@@ -37,6 +37,12 @@ class ExitLifetimeRunnerTests(unittest.TestCase):
         self.assertFalse(missing["proof"])
         self.assertTrue(panic["kernel_panic"])
 
+    def test_console_result_file_can_replace_network_bye(self):
+        manifest = {**self.manifest, "result_file": "/data/lapy-test.log"}
+        result = RUNNER.evaluate_stream(
+            manifest, self.stream.replace(b"BYE test-build\n", b""), "", [])
+        self.assertTrue(result["proof"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,6 +4,7 @@
 #include "probe_identity.h"
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <machine/reg.h>
 #include <ps5/kernel.h>
@@ -194,17 +195,28 @@ static int same_members(const struct target_snapshot *a,
 
 static int init_probe_log(void)
 {
+#ifdef LAPY_RESULT_FILE
+    int mirror_fd = open(LAPY_RESULT_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (mirror_fd < 0) return -1;
+    ps5log_set_mirror_fd(mirror_fd);
+#endif
 #ifdef LAPY_LOG_SERVER
     ps5log_config config;
+    int result;
     ps5log_config_defaults(&config);
     if (snprintf(config.server, sizeof(config.server), "%s",
                  LAPY_LOG_SERVER) >= (int)sizeof(config.server)) return -1;
-    return ps5log_init(&config, "LAPYTP",
-                       "lapy-live-title-ptrace-retention",
-                       ps5log_monotonic_ns());
+    result = ps5log_init(&config, "LAPYTP",
+                         "lapy-live-title-ptrace-retention",
+                         ps5log_monotonic_ns());
 #else
-    return ps5log_init_default("LAPYTP",
-                               "lapy-live-title-ptrace-retention");
+    int result = ps5log_init_default("LAPYTP",
+                                     "lapy-live-title-ptrace-retention");
+#endif
+#ifdef LAPY_RESULT_FILE
+    return result < 0 ? result : 0;
+#else
+    return result;
 #endif
 }
 

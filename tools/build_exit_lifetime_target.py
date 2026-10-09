@@ -24,6 +24,8 @@ def run(command, env=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--boilerplate", type=Path, required=True)
+    parser.add_argument("--owned-race", action="store_true",
+                        help="write the owned-daemon request and exit after 500 ms")
     args = parser.parse_args()
     boilerplate = args.boilerplate.resolve()
     sdk = boilerplate / ".deps/native/ps5-payload-sdk"
@@ -40,6 +42,8 @@ def main():
         parser.error("boilerplate must have a completed PPSA99999 Folder build")
 
     out = ROOT / f"build/exit-lifetime-target/{TITLE}"
+    if args.owned_race:
+        out /= "owned-race"
     out.mkdir(parents=True, exist_ok=True)
     target_object = out / "target_main.o"
     linked = out / "llvm-pie.elf"
@@ -47,9 +51,12 @@ def main():
     env = {**os.environ, "PS5_PAYLOAD_SDK": str(sdk),
            "PS5_CLANG": shutil.which("clang-18") or "clang-18",
            "USE_CCACHE": "1"}
+    compile_flags = (["-DLAPY_OWNED_RACE_TARGET=1"]
+                     if args.owned_race else [])
     run(["sh", compiler, "-std=c++20", "-O2", "-Wall", "-Wextra",
          "-Werror", "-fno-exceptions", "-fno-rtti", "-ffunction-sections",
-         "-fdata-sections", f"-I{boilerplate / 'src'}", "-c", source,
+         "-fdata-sections", *compile_flags,
+         f"-I{boilerplate / 'src'}", "-c", source,
          "-o", target_object], env)
     libraries = sorted((sdk / "target/lib").glob("*.so"))
     run([sdk / "bin/prospero-lld", "-T",
@@ -70,6 +77,7 @@ def main():
     files = {str(path.relative_to(package)): sha(path)
              for path in sorted(package.rglob("*")) if path.is_file()}
     manifest = {"schema": "lapy-exit-target/1", "title": TITLE,
+                "owned_race": args.owned_race,
                 "source_sha256": sha(source), "eboot_sha256": files["eboot.bin"],
                 "files_sha256": files}
     (out / "manifest.json").write_text(

@@ -3,8 +3,9 @@
 This fork provides a resident elevation daemon for PS5 firmware supported by
 the payload SDK. It is intended for homebrew that repeatedly launches processes
 needing `/data` access, such as a launcher starting games. The resident service
-has been validated on firmware 12.02. The one-shot helper's donor lifecycle has
-also been exercised in an integrated caller on firmware 6.02 and 12.70; see
+has repeat validation on firmware 12.02. Its target-lifetime fix and full
+transaction have also been exercised on firmware 12.70, while the one-shot
+helper's donor lifecycle was tested on firmware 6.02 and 12.70; see
 [Validation and limits](#validation-and-limits). Other versions are
 experimental: the daemon checks its assumed kernel layout with native
 `getgroups` and a disposable child before changing a target, and refuses to
@@ -86,6 +87,15 @@ concurrent daemons and
 unusual exit or exec paths are not established by these trials. Historical
 source research is in [ELEVATION.md](docs/ELEVATION.md). License terms are in
 [LICENSE](LICENSE).
+
+On FW 12.70, a disposable title confirmed that the previous daemon could
+cache a live `proc` together with already released `filedesc` and `ucred`
+pointers before ptrace attachment. The daemon now observes the ptrace stop
+before its first target snapshot. Under the same forced two-second window,
+all identities remained current and the complete elevation transaction
+succeeded without a kernel panic. The exact reproduction, artifact hashes,
+and limitation of that result are in
+[the target exit-lifetime record](docs/TARGET_EXIT_LIFETIME.md).
 
 The `SIGKILL` donor-release one-shot helper was additionally tested through an
 integrated exact-title caller for **5/5 cycles on FW 6.02** and **5/5 cycles on

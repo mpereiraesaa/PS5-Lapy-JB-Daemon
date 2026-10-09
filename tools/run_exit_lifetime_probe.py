@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Send the read-only exit-lifetime probe and preserve its ps5log stream."""
 import argparse
+import ftplib
 import hashlib
 import json
 from datetime import datetime, timezone
@@ -15,6 +16,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def evaluate_stream(manifest, stream, klog_text, sender_errors):
     text = stream.decode("utf-8", "replace")
+    completed = ("BYE " in text or
+                 (manifest.get("result_file") and
+                  "probe_result " in text and
+                  "stage=complete error=0" in text))
     proof = (f"build={manifest['build_id']}" in text and
              "stopped_kill_guard " in text and
              "external_kill_queued=1" in text and
@@ -24,7 +29,7 @@ def evaluate_stream(manifest, stream, klog_text, sender_errors):
              "exit_lifetime_result " in text and "killed=1" in text and
              "stopped_fd_retained=1" in text and
              "reaped=1" in text and "stage=complete error=0" in text and
-             "BYE " in text)
+             completed)
     return {"build_id": manifest["build_id"],
             "elf_sha256": manifest["elf_sha256"],
             "proof": proof,
@@ -69,6 +74,17 @@ def send_elf(host, port, elf, path, errors):
         errors.append(str(error))
 
 
+def read_result_file(ftp, path):
+    data = bytearray()
+    try:
+        ftp.retrbinary("RETR " + path, data.extend)
+    except ftplib.error_perm as error:
+        if not str(error).startswith("550"):
+            raise
+        return None
+    return bytes(data)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("host")
@@ -93,37 +109,68 @@ def main():
     run.mkdir(parents=True)
     done = threading.Event()
     errors = []
+    result_file = manifest.get("result_file")
     klog = threading.Thread(target=receive_klog,
                             args=(args.host, args.klog_port, run / "klog.txt", done),
                             daemon=True)
     klog.start()
-    with socket.socket() as listener:
-        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        listener.bind(("", args.log_port))
-        listener.listen(1)
-        listener.settimeout(10)
-        sender = threading.Thread(target=send_elf,
-                                  args=(args.host, args.elf_port, elf,
-                                        run / "elfldr.txt", errors), daemon=True)
-        sender.start()
-        print(f"Sent {digest}; waiting for LAPYTP on TCP {args.log_port}", flush=True)
-        connection, peer = listener.accept()
-        print(f"Probe connected from {peer[0]}; launch {args.title} now", flush=True)
-        connection.settimeout(1)
-        stream = bytearray()
-        deadline = time.monotonic() + 75
-        with connection:
+    if result_file:
+        with ftplib.FTP() as ftp:
+            ftp.connect(args.host, 2121, 5)
+            ftp.login()
+            try:
+                ftp.sendcmd("DELE " + result_file)
+            except ftplib.error_perm as error:
+                if not str(error).startswith("550"):
+                    raise
+            sender = threading.Thread(target=send_elf,
+                                      args=(args.host, args.elf_port, elf,
+                                            run / "elfldr.txt", errors), daemon=True)
+            sender.start()
+            print(f"Sent {digest}; polling {result_file}; launch {args.title} now",
+                  flush=True)
+            deadline = time.monotonic() + 75
+            stream = b""
             while time.monotonic() < deadline:
-                try:
-                    data = connection.recv(65536)
-                except socket.timeout:
-                    continue
-                if not data:
-                    break
-                stream.extend(data)
-                print(data.decode("utf-8", "replace"), end="", flush=True)
-                if b"BYE " in stream:
-                    break
+                current = read_result_file(ftp, result_file)
+                if current is not None:
+                    stream = current
+                    text = stream.decode("utf-8", "replace")
+                    if "probe_result " in text:
+                        break
+                time.sleep(0.25)
+            else:
+                errors.append("timed out waiting for console result file")
+            if stream:
+                print(stream.decode("utf-8", "replace"), end="", flush=True)
+    else:
+        with socket.socket() as listener:
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            listener.bind(("", args.log_port))
+            listener.listen(1)
+            listener.settimeout(10)
+            sender = threading.Thread(target=send_elf,
+                                      args=(args.host, args.elf_port, elf,
+                                            run / "elfldr.txt", errors), daemon=True)
+            sender.start()
+            print(f"Sent {digest}; waiting for LAPYTP on TCP {args.log_port}", flush=True)
+            connection, peer = listener.accept()
+            print(f"Probe connected from {peer[0]}; launch {args.title} now", flush=True)
+            connection.settimeout(1)
+            stream = bytearray()
+            deadline = time.monotonic() + 75
+            with connection:
+                while time.monotonic() < deadline:
+                    try:
+                        data = connection.recv(65536)
+                    except socket.timeout:
+                        continue
+                    if not data:
+                        break
+                    stream.extend(data)
+                    print(data.decode("utf-8", "replace"), end="", flush=True)
+                    if b"BYE " in stream:
+                        break
     done.set()
     sender.join(5)
     klog.join(5)

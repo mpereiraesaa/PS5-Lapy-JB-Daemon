@@ -33,6 +33,10 @@ def main():
                         help="require the laboratory data read/write result file")
     parser.add_argument("--max-requests", type=int, default=0,
                         help="bound a service build for controlled tests; 0 is unlimited")
+    parser.add_argument("--result-file",
+                        help="also mirror daemon records to this absolute console path")
+    parser.add_argument("--target-snapshot-delay-us", type=int, default=0,
+                        help="test-only delay after the first target proc lookup")
     args = parser.parse_args()
     if args.max_requests < 0 or args.max_requests > 1000000:
         parser.error("--max-requests must be between 0 and 1000000")
@@ -40,6 +44,16 @@ def main():
         parser.error("--service and --elf-helper are separate build modes")
     if not args.service and args.max_requests:
         parser.error("--max-requests requires --service")
+    if args.result_file is not None and (
+            not args.result_file.startswith("/data/") or any(
+                part in ("", ".", "..")
+                for part in args.result_file[6:].split("/"))):
+        parser.error("--result-file must be a normalized absolute path below /data")
+    if args.target_snapshot_delay_us < 0 or args.target_snapshot_delay_us > 5000000:
+        parser.error("--target-snapshot-delay-us must be between 0 and 5000000")
+    if args.target_snapshot_delay_us and (
+            not args.service or args.max_requests != 1):
+        parser.error("--target-snapshot-delay-us requires --service --max-requests 1")
     title = args.title or ("*" if args.service else "PPSA99994")
     if title != "*" and not re.fullmatch(r"PPSA[0-9]{5}", title):
         parser.error("--title must be a PPSA title or *")
@@ -65,6 +79,11 @@ def main():
              f'-DLAPY_ELF_HELPER={int(args.elf_helper)}',
              f'-DLAPY_REQUIRE_CLIENT_RESULT={int(require_client_result)}',
              f'-DLAPY_MAX_REQUESTS={args.max_requests}']
+    if args.result_file is not None:
+        flags.append(f'-DLAPY_RESULT_FILE="{args.result_file}"')
+    if args.target_snapshot_delay_us:
+        flags.append(
+            f'-DLAPY_TARGET_SNAPSHOT_DELAY_US={args.target_snapshot_delay_us}')
     identity = hashlib.sha256(json.dumps({"inputs": inputs,
                                           "sdk": sdk_inputs,
                                           "flags": flags},
@@ -101,6 +120,8 @@ def main():
                 "max_requests": (args.max_requests or None) if args.service else 1,
                 "service": args.service,
                 "require_client_result": require_client_result,
+                "result_file": args.result_file,
+                "target_snapshot_delay_us": args.target_snapshot_delay_us or None,
                 "console_validated": False,
                 "elf_sha256": digest(elf), "inputs_sha256": inputs,
                 "sdk_inputs_sha256": sdk_inputs}
