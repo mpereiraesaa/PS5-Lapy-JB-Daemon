@@ -60,11 +60,13 @@ The daemon attaches and observes the ptrace stop before its first target
 kernel-pointer snapshot. If the title exits before that stop is observed, the
 daemon treats the request as vanished without dereferencing a cached target
 identity. Once stopped, it takes two stable snapshots before reading
-credentials or preparing donors. If the original title is still present but
-credential restoration or ptrace detach fails, or if a root slot may have
-been touched, the daemon retains the `daemon_held` stop rather than guessing
-ownership. `target_drift` records pre-transfer snapshot differences for
-diagnosis.
+credentials or preparing donors. The request PID must also report the title ID
+from the sandbox that contained the marker, both before attach and again after
+the stop. If the original title is still present but credential restoration
+or ptrace detach fails, if the post-transfer root counts are not exactly two
+above baseline, or if a root slot may have been touched, the daemon retains
+the `daemon_held` stop rather than guessing ownership. `target_drift` records
+pre-transfer snapshot differences for diagnosis.
 
 Build with the installed SDK and the lab's `ps5log/1` client:
 
@@ -138,6 +140,20 @@ and SHA-256
 No kernel panic occurred in either controlled run; the stale dereference was
 confirmed directly. See `TARGET_EXIT_LIFETIME.md` for the reproduction and
 the exact unfixed artifact identity.
+
+The hardened one-shot mode then completed a full FW 12.70 lifecycle with build
+ID
+`5c86133420891935b5f98dee086c90ffbf8bee37b2943ed996179e8ffc2c654b`
+and SHA-256
+`249f0d0ce70d8b5a8159b3361741a3cdcda5e1488e118318e54dbae92b46cb46`.
+The system-root counters were `74/73` at baseline, `78/77` with both donors,
+`76/75` after donor teardown, and back to `74/73` after title exit. The title
+confirmed `/data` read/write, the daemon required `expected_two=1` before
+detach, and the final result reported `root_balanced=1`. A second signed title
+requested PID 2; the same payload rejected it at `target_identity` with no
+target snapshot, credential write, root transfer, or ptrace attachment. Both
+klog windows contained no kernel panic. The temporary title was restored and
+FTP, klog, and elfldr remained reachable.
 
 The cooperative test title preopened a result file in `/download0` before
 elevation and wrote its `/data` read/write result through that descriptor

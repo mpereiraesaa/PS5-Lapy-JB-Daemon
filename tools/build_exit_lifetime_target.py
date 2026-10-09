@@ -24,9 +24,16 @@ def run(command, env=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--boilerplate", type=Path, required=True)
-    parser.add_argument("--owned-race", action="store_true",
-                        help="write the owned-daemon request and exit after 500 ms")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--owned-race", action="store_true",
+                      help="write the owned-daemon request and exit after 500 ms")
+    mode.add_argument("--owned-one-shot", action="store_true",
+                      help="exercise the one-shot result and /data lifecycle")
+    parser.add_argument("--wrong-pid", action="store_true",
+                        help="request PID 2 to test title-identity rejection")
     args = parser.parse_args()
+    if args.wrong_pid and not args.owned_one_shot:
+        parser.error("--wrong-pid requires --owned-one-shot")
     boilerplate = args.boilerplate.resolve()
     sdk = boilerplate / ".deps/native/ps5-payload-sdk"
     compiler = boilerplate / "tooling/prospero-clang18"
@@ -44,6 +51,8 @@ def main():
     out = ROOT / f"build/exit-lifetime-target/{TITLE}"
     if args.owned_race:
         out /= "owned-race"
+    elif args.owned_one_shot:
+        out /= "owned-one-shot-wrong-pid" if args.wrong_pid else "owned-one-shot"
     out.mkdir(parents=True, exist_ok=True)
     target_object = out / "target_main.o"
     linked = out / "llvm-pie.elf"
@@ -51,8 +60,11 @@ def main():
     env = {**os.environ, "PS5_PAYLOAD_SDK": str(sdk),
            "PS5_CLANG": shutil.which("clang-18") or "clang-18",
            "USE_CCACHE": "1"}
-    compile_flags = (["-DLAPY_OWNED_RACE_TARGET=1"]
-                     if args.owned_race else [])
+    compile_flags = (["-DLAPY_OWNED_RACE_TARGET=1"] if args.owned_race else
+                     ["-DLAPY_OWNED_ONE_SHOT_TARGET=1"]
+                     if args.owned_one_shot else [])
+    if args.wrong_pid:
+        compile_flags.append("-DLAPY_WRONG_PID_TARGET=1")
     run(["sh", compiler, "-std=c++20", "-O2", "-Wall", "-Wextra",
          "-Werror", "-fno-exceptions", "-fno-rtti", "-ffunction-sections",
          "-fdata-sections", *compile_flags,
@@ -78,6 +90,8 @@ def main():
              for path in sorted(package.rglob("*")) if path.is_file()}
     manifest = {"schema": "lapy-exit-target/1", "title": TITLE,
                 "owned_race": args.owned_race,
+                "owned_one_shot": args.owned_one_shot,
+                "wrong_pid": args.wrong_pid,
                 "source_sha256": sha(source), "eboot_sha256": files["eboot.bin"],
                 "files_sha256": files}
     (out / "manifest.json").write_text(

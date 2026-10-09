@@ -85,6 +85,24 @@ struct credentials {
     uint8_t caps[16];
 };
 
+struct target_app_info {
+    uint32_t app_id;
+    uint64_t unknown1;
+    char title_id[14];
+    char unknown2[0x3c];
+};
+
+extern int sceKernelGetAppInfo(pid_t pid, struct target_app_info *info);
+
+static int target_title_matches(pid_t pid, const char expected[10])
+{
+    struct target_app_info info;
+    memset(&info, 0, sizeof(info));
+    return expected && expected[9] == 0 &&
+           sceKernelGetAppInfo(pid, &info) == 0 &&
+           !memcmp(info.title_id, expected, 10);
+}
+
 static int read_ptr(void *unused, intptr_t address, intptr_t *value)
 {
     (void)unused;
@@ -226,7 +244,8 @@ static pid_t parse_pid(const char *message)
            -1 : (pid_t)value;
 }
 
-static int find_request(char path[512], pid_t *pid, time_t started)
+static int find_request(char path[512], char title[10], pid_t *pid,
+                        time_t started)
 {
     DIR *directory = opendir(SANDBOX_BASE);
     if (!directory) return errno == ENOENT ? 0 : -(errno ? errno : EIO);
@@ -260,6 +279,10 @@ static int find_request(char path[512], pid_t *pid, time_t started)
         message[size] = 0;
         *pid = parse_pid(message);
         result = *pid > 1 ? 1 : -EINVAL;
+        if (result > 0) {
+            memcpy(title, entry->d_name, 9);
+            title[9] = 0;
+        }
         break;
     }
     closedir(directory);
@@ -632,7 +655,8 @@ static int transferred_target_gone(pid_t pid, intptr_t original_proc,
 
 static int run_one(pid_t pid, intptr_t system_root,
                    const struct lapy_vnode_ref_counts *baseline,
-                   size_t thread_credential_offset)
+                   size_t thread_credential_offset,
+                   const char expected_title[10])
 {
     struct child first = {.pid = -1};
     struct child second = {.pid = -1};
@@ -647,6 +671,10 @@ static int run_one(pid_t pid, intptr_t system_root,
     int roots_touched = 0;
     const char *stage = "target_preflight";
 
+    stage = "target_identity";
+    if (!target_title_matches(pid, expected_title)) {
+        error = ESRCH; goto done;
+    }
     stage = "tracer_authority";
     self_authid = kernel_get_ucred_authid(getpid());
     if (!self_authid || kernel_set_ucred_authid(getpid(), PTRACE_AUTHID) ||
@@ -667,6 +695,10 @@ static int run_one(pid_t pid, intptr_t system_root,
             goto target_gone;
         }
         goto done;
+    }
+    stage = "target_identity_stopped";
+    if (!target_title_matches(pid, expected_title)) {
+        error = ESRCH; goto done;
     }
     stage = "target_preflight";
     ps5log_printf(PS5LOG_MARK,
@@ -795,11 +827,13 @@ static int run_one(pid_t pid, intptr_t system_root,
         (error = release_child(&second))) goto held;
     if ((error = sample_root(system_root, "donors_reaped", &sample)))
         goto held;
+    int expected_two = lapy_vnode_ref_probe_added_two(baseline, &sample);
     ps5log_printf(PS5LOG_MARK,
                   "donor_balance build=%s expected_two=%d",
-                  LAPY_OWNED_ID,
-                  sample.hold == baseline->hold + 2 &&
-                  sample.use == baseline->use + 2);
+                  LAPY_OWNED_ID, expected_two);
+    if (!expected_two) {
+        error = EPROTO; goto held;
+    }
     stage = "detach";
     if (ptrace(PT_DETACH, pid, (caddr_t)1, 0)) {
         error = errno ? errno : EIO;
@@ -886,14 +920,6 @@ held:
 }
 
 #if LAPY_ELF_HELPER
-struct helper_app_info {
-    uint32_t app_id;
-    uint64_t unknown1;
-    char title_id[14];
-    char unknown2[0x3c];
-};
-extern int sceKernelGetAppInfo(pid_t pid, struct helper_app_info *info);
-
 static int helper_transfer(int fd, void *buffer, size_t size, int writing)
 {
     unsigned char *bytes = buffer;
@@ -915,14 +941,6 @@ static int helper_message_matches(const struct lapy_elevation_message *message,
            message->size == sizeof(*message) && message->kind == kind &&
            message->capability == request->capability &&
            message->pid == request->pid;
-}
-
-static int helper_target_title_matches(pid_t pid)
-{
-    struct helper_app_info info;
-    memset(&info, 0, sizeof(info));
-    return sceKernelGetAppInfo(pid, &info) == 0 &&
-           !memcmp(info.title_id, TARGET_TITLE, sizeof(TARGET_TITLE));
 }
 
 static uint32_t helper_status_for_error(int error)
@@ -950,7 +968,7 @@ static int run_helper_request(intptr_t root,
     else if (request.kind != LAPY_ELEVATION_REQUEST || request.pid <= 1 ||
              request.capability != LAPY_ELEVATION_FILESYSTEM || request.status)
         status = LAPY_ELEVATION_UNSUPPORTED_CAPABILITY;
-    else if (!helper_target_title_matches((pid_t)request.pid))
+    else if (!target_title_matches((pid_t)request.pid, TARGET_TITLE))
         status = LAPY_ELEVATION_TARGET_MISMATCH;
 
     if (status != LAPY_ELEVATION_OK) goto respond;
@@ -973,7 +991,7 @@ static int run_helper_request(intptr_t root,
         goto respond;
     }
     /* Recheck the PID/title after the cooperative credential clone. */
-    if (!helper_target_title_matches((pid_t)request.pid)) {
+    if (!target_title_matches((pid_t)request.pid, TARGET_TITLE)) {
         status = LAPY_ELEVATION_TARGET_MISMATCH;
         goto respond;
     }
@@ -982,7 +1000,7 @@ static int run_helper_request(intptr_t root,
         goto respond;
     }
     error = run_one((pid_t)request.pid, root, &baseline,
-                    thread_credential_offset);
+                    thread_credential_offset, TARGET_TITLE);
     status = error ? helper_status_for_error(error) : LAPY_ELEVATION_OK;
 
 respond:
@@ -999,6 +1017,7 @@ int main(void)
 {
 #if !LAPY_ELF_HELPER
     char path[512] = {0};
+    char request_title[10] = {0};
 #endif
 #if !LAPY_SERVICE || LAPY_REQUIRE_CLIENT_RESULT
 #if !LAPY_ELF_HELPER
@@ -1103,12 +1122,13 @@ int main(void)
 #elif LAPY_SERVICE
     for (unsigned completed = 0;;) {
         path[0] = 0;
+        request_title[0] = 0;
         pid = -1;
         acknowledged = 0;
         stage = "find_request";
         int found = 0;
         for (unsigned polls = 0; polls < 600; ++polls) {
-            found = find_request(path, &pid, started);
+            found = find_request(path, request_title, &pid, started);
             if (found < 0) { error = -found; goto done; }
             if (found) break;
             usleep(100000);
@@ -1118,7 +1138,7 @@ int main(void)
         if ((error = sample_root(root, "before_request", &baseline)))
             goto done;
         error = run_one(pid, root, &baseline,
-                        thread_credential_offset);
+                        thread_credential_offset, request_title);
         if (path[0] && !unlink(path)) acknowledged = 1;
         else if (error == ESRCH && errno == ENOENT) acknowledged = 1;
         else if (!error) error = errno ? errno : EIO;
@@ -1146,7 +1166,7 @@ int main(void)
     if ((error = sample_root(root, "baseline", &baseline))) goto done;
     stage = "find_request";
     for (unsigned polls = 0; polls < 600; ++polls) {
-        int found = find_request(path, &pid, started);
+        int found = find_request(path, request_title, &pid, started);
         if (found < 0) { error = -found; goto done; }
         if (found) break;
         if (polls == 599) { error = ETIMEDOUT; goto done; }
@@ -1154,7 +1174,8 @@ int main(void)
     }
     stage = "request";
     if ((error = client_result_path(path, result_path))) goto done;
-    error = run_one(pid, root, &baseline, thread_credential_offset);
+    error = run_one(pid, root, &baseline, thread_credential_offset,
+                    request_title);
     if (path[0] && !unlink(path)) acknowledged = 1;
     else if (!error) error = errno ? errno : EIO;
     if (error) goto done;

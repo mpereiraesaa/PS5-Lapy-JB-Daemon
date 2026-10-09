@@ -97,6 +97,14 @@ succeeded without a kernel panic. The exact reproduction, artifact hashes,
 and limitation of that result are in
 [the target exit-lifetime record](docs/TARGET_EXIT_LIFETIME.md).
 
+The one-shot payload also binds each request PID to the title ID of the
+sandbox containing the marker, checks that identity again after stopping the
+process, and refuses to detach unless donor teardown leaves exactly two native
+system-root references. On FW 12.70, the hardened one-shot completed `/data`
+read/write and returned root counters to baseline after title exit. A separate
+PID-2 request was rejected at the identity check before ptrace or any kernel
+mutation.
+
 The `SIGKILL` donor-release one-shot helper was additionally tested through an
 integrated exact-title caller for **5/5 cycles on FW 6.02** and **5/5 cycles on
 FW 12.70**. Every cycle reported successful `/data` access as root,
