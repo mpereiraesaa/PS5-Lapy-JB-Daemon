@@ -16,9 +16,13 @@ ROOT = Path(__file__).resolve().parents[1]
 def evaluate_stream(manifest, stream, klog_text, sender_errors):
     text = stream.decode("utf-8", "replace")
     proof = (f"build={manifest['build_id']}" in text and
+             "stopped_kill_guard " in text and
+             "external_kill_queued=1" in text and
+             "fd_retained=1" in text and
              "target_exit_lifetime " in text and
              "retained_proc=1" in text and "fd_cleared=1" in text and
              "exit_lifetime_result " in text and "killed=1" in text and
+             "stopped_fd_retained=1" in text and
              "reaped=1" in text and "stage=complete error=0" in text and
              "BYE " in text)
     return {"build_id": manifest["build_id"],

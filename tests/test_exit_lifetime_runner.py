@@ -14,9 +14,12 @@ class ExitLifetimeRunnerTests(unittest.TestCase):
     def setUp(self):
         self.manifest = {"build_id": "test-build", "elf_sha256": "a" * 64}
         self.stream = (
+            b"MARK stopped_kill_guard build=test-build "
+            b"external_kill_queued=1 fd_retained=1\n"
             b"MARK target_exit_lifetime build=test-build retained_proc=1 "
             b"private_fd_before=1 fd_cleared=1 ucred_cleared=1 polls=2\n"
-            b"MARK exit_lifetime_result build=test-build killed=1 "
+            b"MARK exit_lifetime_result build=test-build "
+            b"external_kill_queued=1 stopped_fd_retained=1 killed=1 "
             b"retained_proc=1 fd_cleared=1 ucred_cleared=1 reaped=1\n"
             b"MARK probe_result build=test-build stage=complete error=0\n"
             b"BYE test-build\n")

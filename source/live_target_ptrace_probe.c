@@ -266,7 +266,9 @@ int main(void)
     intptr_t self_cred_before = 0, self_cred_after = 0;
     uint64_t original_authid = 0;
 #if LAPY_EXIT_LIFETIME
+    struct target_snapshot kill_queued_a, kill_queued_b;
     unsigned exit_polls = 0, reap_polls = 0;
+    int external_kill_queued = 0, stopped_fd_retained = 0;
     int target_killed = 0, target_reaped = 0, retained_proc = 0;
     int fd_cleared = 0, ucred_cleared = 0;
 #endif
@@ -363,8 +365,28 @@ int main(void)
                   "target_stopped build=%s private_self_cred=1 retained_identity=1 threads=%u suspended=%u private_fd=1",
                   LAPY_PROBE_ID, threads, suspended);
 #if LAPY_EXIT_LIFETIME
-    stage = "kill_stopped_target";
-    if (ptrace(PT_CONTINUE, pid, (caddr_t)1, SIGKILL)) {
+    stage = "queue_external_kill";
+    if (kill(pid, SIGKILL)) {
+        error = errno ? errno : EIO; goto done;
+    }
+    external_kill_queued = 1;
+    usleep(250000);
+    if ((error = read_lifetime_target(pid, &kill_queued_a)) ||
+        (error = read_lifetime_target(pid, &kill_queued_b))) goto done;
+    stopped_fd_retained = kill_queued_a.proc == stopped_b.proc &&
+                          kill_queued_a.filedesc == stopped_b.filedesc &&
+                          kill_queued_a.credential == stopped_b.credential &&
+                          kill_queued_a.fd_refs == stopped_b.fd_refs &&
+                          kill_queued_b.proc == kill_queued_a.proc &&
+                          kill_queued_b.filedesc == kill_queued_a.filedesc &&
+                          kill_queued_b.credential == kill_queued_a.credential &&
+                          kill_queued_b.fd_refs == kill_queued_a.fd_refs;
+    ps5log_printf(stopped_fd_retained ? PS5LOG_MARK : PS5LOG_ERR,
+                  "stopped_kill_guard build=%s external_kill_queued=1 fd_retained=%d",
+                  LAPY_PROBE_ID, stopped_fd_retained);
+    if (!stopped_fd_retained) { error = EBUSY; goto done; }
+    stage = "resume_killed_target";
+    if (ptrace(PT_CONTINUE, pid, (caddr_t)1, 0)) {
         error = errno ? errno : EIO; goto done;
     }
     target_killed = 1;
@@ -465,9 +487,10 @@ done:
 #if LAPY_EXIT_LIFETIME
     ps5log_printf((retained_proc && fd_cleared && target_reaped) ?
                   PS5LOG_MARK : PS5LOG_ERR,
-                  "exit_lifetime_result build=%s killed=%d retained_proc=%d fd_cleared=%d ucred_cleared=%d reaped=%d exit_polls=%u reap_polls=%u",
-                  LAPY_PROBE_ID, target_killed, retained_proc, fd_cleared,
-                  ucred_cleared, target_reaped, exit_polls, reap_polls);
+                  "exit_lifetime_result build=%s external_kill_queued=%d stopped_fd_retained=%d killed=%d retained_proc=%d fd_cleared=%d ucred_cleared=%d reaped=%d exit_polls=%u reap_polls=%u",
+                  LAPY_PROBE_ID, external_kill_queued, stopped_fd_retained,
+                  target_killed, retained_proc, fd_cleared, ucred_cleared,
+                  target_reaped, exit_polls, reap_polls);
 #endif
     ps5log_printf(error ? PS5LOG_ERR : PS5LOG_MARK,
                   "probe_result build=%s stage=%s error=%d polls=%u wait_polls=%u target_pid=%d attached=%d detached=%d acknowledged=%d threads=%u suspended=%u stable_stop=%d private_fd=%d private_self_cred=%d auth_restored=%d",
