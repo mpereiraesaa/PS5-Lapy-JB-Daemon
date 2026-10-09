@@ -31,6 +31,8 @@ def main():
                         help="locally SIGSTOP disposable target; retained-nonroot only")
     parser.add_argument("--scan-gadget", action="store_true",
                         help="read-only scan near retained title RIP; live-target-ptrace only")
+    parser.add_argument("--exit-lifetime", action="store_true",
+                        help="kill the stopped title and observe proc pointer invalidation; live-target-ptrace only")
     parser.add_argument("--sony-privileges", action="store_true",
                         help="temporarily change Sony fields after native credential replacement, cross-root probe only")
     parser.add_argument("--root-identity", action="store_true",
@@ -60,6 +62,10 @@ def main():
         parser.error("--self-stop requires --probe retained-nonroot")
     if args.scan_gadget and args.probe != "live-target-ptrace":
         parser.error("--scan-gadget requires --probe live-target-ptrace")
+    if args.exit_lifetime and args.probe != "live-target-ptrace":
+        parser.error("--exit-lifetime requires --probe live-target-ptrace")
+    if args.exit_lifetime and args.scan_gadget:
+        parser.error("--exit-lifetime and --scan-gadget are mutually exclusive")
     sdk = Path(args.sdk).resolve()
     logging = args.logging_client.resolve()
     names = {"transport": ("native_probe.c", "native_directory.c", "native_directory.h"),
@@ -130,6 +136,8 @@ def main():
         flags.append("-DLAPY_SELF_STOP=1")
     if args.scan_gadget:
         flags.append("-DLAPY_SCAN_GADGET=1")
+    if args.exit_lifetime:
+        flags.append("-DLAPY_EXIT_LIFETIME=1")
     identity = hashlib.sha256(json.dumps({"inputs": inputs, "sdk": sdk_inputs,
                                          "flags": flags}, sort_keys=True).encode()).hexdigest()
     stem = {"transport": "native", "credentials": "credential", "vfs": "vfs",
@@ -159,6 +167,7 @@ def main():
                      f"build/{stem}-probe/pid-{args.target_pid}" if args.probe == "target-dirs" else
                      f"build/{stem}-probe/{args.target_title}/state" if args.probe == "live-target-stop" and args.target_title and args.observe_state else
                      f"build/{stem}-probe/{args.target_title}" if args.probe == "live-target-stop" and args.target_title else
+                     f"build/{stem}-probe/{args.target_title}/exit-lifetime" if args.probe == "live-target-ptrace" and args.target_title and args.exit_lifetime else
                      f"build/{stem}-probe/{args.target_title}/scan" if args.probe == "live-target-ptrace" and args.target_title and args.scan_gadget else
                      f"build/{stem}-probe/{args.target_title}" if args.probe == "live-target-ptrace" and args.target_title else
                      f"build/{stem}-probe/self-stop" if args.probe == "retained-nonroot" and args.self_stop else
@@ -215,7 +224,7 @@ def main():
                                             "signal-quiescence": "disposable-multithread-signal-quiescence",
                                             "thread-stop-calibration": "disposable-thread-and-stop-field-calibration",
                                             "live-target-stop": "live-title-signal-stop-read-only",
-                                            "live-target-ptrace": "live-title-ptrace-retention-read-only",
+                                            "live-target-ptrace": "live-title-exit-lifetime-read-only" if args.exit_lifetime else "live-title-ptrace-retention-read-only",
                                             "debug-retention": "disposable-debug-retention-child",
                                             "move-only": "move-only-donor-reference-round-trip",
                                             "retained-cross-process": "disposable-retained-cross-process-ref-transfer",
@@ -231,6 +240,7 @@ def main():
                                    "observe_state": args.observe_state if args.probe == "live-target-stop" else None,
                                    "self_stop": args.self_stop if args.probe == "retained-nonroot" else None,
                                    "scan_gadget": args.scan_gadget if args.probe == "live-target-ptrace" else None,
+                                   "exit_lifetime": args.exit_lifetime if args.probe == "live-target-ptrace" else None,
                                    "console_validated": False}, indent=2, sort_keys=True) + "\n")
     print(f"Built {elf.relative_to(ROOT)}\nbuild_id={identity}\nsha256={sha(elf)}")
 

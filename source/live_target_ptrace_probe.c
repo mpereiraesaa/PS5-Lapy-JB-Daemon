@@ -1,4 +1,4 @@
-/* One-shot FW 12.02 title ptrace-retention observer. No target mutation. */
+/* One-shot title ptrace-retention and exit-lifetime observer. */
 #define PS5LOG_IMPLEMENTATION
 #include "ps5log.h"
 #include "probe_identity.h"
@@ -37,6 +37,9 @@
 #ifndef LAPY_SCAN_GADGET
 #define LAPY_SCAN_GADGET 0
 #endif
+#ifndef LAPY_EXIT_LIFETIME
+#define LAPY_EXIT_LIFETIME 0
+#endif
 #ifndef LAPY_OBSERVE_STATE
 #define LAPY_OBSERVE_STATE 0
 #endif
@@ -47,12 +50,12 @@ extern intptr_t kernel_get_ucred_prison(pid_t pid);
 #endif
 
 struct target_snapshot {
-    intptr_t proc, filedesc;
+    intptr_t proc, filedesc, credential;
     intptr_t threads[MAX_THREADS];
     unsigned count, suspended;
     uint32_t fd_refs;
 #if LAPY_OBSERVE_STATE
-    intptr_t root, jail, cwd, credential, prison;
+    intptr_t root, jail, cwd, prison;
     uid_t uid, ruid, svuid;
     gid_t rgid;
     uint64_t authid, attrs;
@@ -114,7 +117,8 @@ static int read_target(pid_t pid, struct target_snapshot *out)
         kernel_copyout(out->proc + PROC_PID_OFFSET, &observed,
                        sizeof(observed)) || observed != pid) return ESRCH;
     out->filedesc = kernel_get_proc_filedesc(pid);
-    if (!out->filedesc ||
+    out->credential = kernel_get_proc_ucred(pid);
+    if (!out->filedesc || !out->credential ||
         kernel_copyout(out->filedesc + FD_REFCNT, &out->fd_refs,
                        sizeof(out->fd_refs)) ||
         kernel_copyout(out->proc + PROC_SUSPCOUNT, &out->suspended,
@@ -122,9 +126,8 @@ static int read_target(pid_t pid, struct target_snapshot *out)
         kernel_copyout(out->proc + PROC_THREADS_HEAD, &current,
                        sizeof(current))) return EFAULT;
 #if LAPY_OBSERVE_STATE
-    out->credential = kernel_get_proc_ucred(pid);
     out->prison = kernel_get_ucred_prison(pid);
-    if (!out->credential || !out->prison ||
+    if (!out->prison ||
         kernel_copyout(out->filedesc + KERNEL_OFFSET_FILEDESC_FD_RDIR,
                        &out->root, sizeof(out->root)) ||
         kernel_copyout(out->filedesc + KERNEL_OFFSET_FILEDESC_FD_JDIR,
@@ -152,17 +155,35 @@ static int read_target(pid_t pid, struct target_snapshot *out)
     return out->count ? 0 : EPROTO;
 }
 
+#if LAPY_EXIT_LIFETIME
+static int read_lifetime_target(pid_t pid, struct target_snapshot *out)
+{
+    pid_t observed = 0;
+    memset(out, 0, sizeof(*out));
+    out->proc = kernel_get_proc(pid);
+    if (!out->proc ||
+        kernel_copyout(out->proc + KERNEL_OFFSET_PROC_P_PID,
+                       &observed, sizeof(observed)) || observed != pid)
+        return ESRCH;
+    out->filedesc = kernel_get_proc_filedesc(pid);
+    out->credential = kernel_get_proc_ucred(pid);
+    return !out->filedesc || !out->credential ||
+           kernel_copyout(out->filedesc + FD_REFCNT, &out->fd_refs,
+                          sizeof(out->fd_refs)) ? EFAULT : 0;
+}
+#endif
+
 static int same_members(const struct target_snapshot *a,
                         const struct target_snapshot *b)
 {
     int equal = a->proc == b->proc && a->filedesc == b->filedesc &&
+           a->credential == b->credential &&
            a->count == b->count && a->fd_refs == b->fd_refs &&
            !memcmp(a->threads, b->threads,
                    a->count * sizeof(a->threads[0]));
 #if LAPY_OBSERVE_STATE
     equal = equal && a->root == b->root && a->jail == b->jail &&
-            a->cwd == b->cwd && a->credential == b->credential &&
-            a->prison == b->prison && a->uid == b->uid &&
+            a->cwd == b->cwd && a->prison == b->prison && a->uid == b->uid &&
             a->ruid == b->ruid && a->svuid == b->svuid &&
             a->rgid == b->rgid && a->authid == b->authid &&
             a->attrs == b->attrs &&
@@ -170,6 +191,26 @@ static int same_members(const struct target_snapshot *a,
 #endif
     return equal;
 }
+
+#if LAPY_EXIT_LIFETIME
+static int reap_killed_target(pid_t pid, unsigned *polls)
+{
+    for (*polls = 0; *polls < 500; ++*polls) {
+        int status = 0;
+        pid_t observed = waitpid(pid, &status, WNOHANG | WUNTRACED);
+        if (observed == pid) {
+            if (WIFEXITED(status) || WIFSIGNALED(status)) return 0;
+            if (WIFSTOPPED(status) &&
+                ptrace(PT_CONTINUE, pid, (caddr_t)1, SIGKILL) &&
+                errno != ESRCH) return errno ? errno : EIO;
+        } else if (observed < 0) {
+            return errno == ECHILD ? 0 : (errno ? errno : EIO);
+        }
+        usleep(10000);
+    }
+    return ETIMEDOUT;
+}
+#endif
 
 #if LAPY_SCAN_GADGET
 static int scan_syscall(pid_t pid, uintptr_t rip, uintptr_t *gadget,
@@ -224,6 +265,11 @@ int main(void)
     int auth_changed = 0, auth_restored = 0, private_self_cred = 0;
     intptr_t self_cred_before = 0, self_cred_after = 0;
     uint64_t original_authid = 0;
+#if LAPY_EXIT_LIFETIME
+    unsigned exit_polls = 0, reap_polls = 0;
+    int target_killed = 0, target_reaped = 0, retained_proc = 0;
+    int fd_cleared = 0, ucred_cleared = 0;
+#endif
 #if LAPY_SCAN_GADGET
     struct reg registers = {0};
     uintptr_t gadget = 0, distance = 0;
@@ -235,11 +281,13 @@ int main(void)
     if (ps5log_init_default("LAPYTP", "lapy-live-title-ptrace-retention"))
         return 2;
     ps5log_printf(PS5LOG_MARK,
-                  "probe_start build=%s firmware=%08x mode=live-title-ptrace-retention title=%s scan_gadget=%d max_polls=%u",
-                  LAPY_PROBE_ID, kernel_get_fw_version(), LAPY_TARGET_TITLE,
-                  LAPY_SCAN_GADGET, MAX_POLLS);
-    if (kernel_get_fw_version() != 0x12020000 ||
-        KERNEL_OFFSET_PROC_P_PID != PROC_PID_OFFSET) {
+                  "probe_start build=%s firmware=%08x mode=%s title=%s scan_gadget=%d max_polls=%u",
+                  LAPY_PROBE_ID, kernel_get_fw_version(),
+                  LAPY_EXIT_LIFETIME ? "live-title-exit-lifetime-read-only" :
+                                       "live-title-ptrace-retention",
+                  LAPY_TARGET_TITLE, LAPY_SCAN_GADGET, MAX_POLLS);
+    if (KERNEL_OFFSET_PROC_P_PID != PROC_PID_OFFSET ||
+        (!LAPY_EXIT_LIFETIME && kernel_get_fw_version() != 0x12020000)) {
         error = ENOTSUP; goto done;
     }
     stage = "find_request";
@@ -251,7 +299,11 @@ int main(void)
     }
     if (polls == MAX_POLLS) { error = ETIMEDOUT; goto done; }
     stage = "target_before";
+#if LAPY_EXIT_LIFETIME
+    if ((error = read_lifetime_target(pid, &before))) goto done;
+#else
     if ((error = read_target(pid, &before))) goto done;
+#endif
     if (before.fd_refs != 1 || before.suspended != 0) {
         error = EBUSY; goto done;
     }
@@ -290,9 +342,15 @@ int main(void)
     }
     if (!stopped) { error = ETIMEDOUT; goto held; }
     stage = "verify_stopped";
+#if LAPY_EXIT_LIFETIME
+    if ((error = read_lifetime_target(pid, &stopped_a))) goto done;
+    usleep(50000);
+    if ((error = read_lifetime_target(pid, &stopped_b))) goto done;
+#else
     if ((error = read_target(pid, &stopped_a))) goto done;
     usleep(50000);
     if ((error = read_target(pid, &stopped_b))) goto done;
+#endif
     stable_stop = stopped_a.proc == before.proc &&
                   stopped_a.filedesc == before.filedesc &&
                   same_members(&stopped_a, &stopped_b) &&
@@ -304,6 +362,40 @@ int main(void)
     ps5log_printf(PS5LOG_MARK,
                   "target_stopped build=%s private_self_cred=1 retained_identity=1 threads=%u suspended=%u private_fd=1",
                   LAPY_PROBE_ID, threads, suspended);
+#if LAPY_EXIT_LIFETIME
+    stage = "kill_stopped_target";
+    if (ptrace(PT_CONTINUE, pid, (caddr_t)1, SIGKILL)) {
+        error = errno ? errno : EIO; goto done;
+    }
+    target_killed = 1;
+    stopped = 0;
+    stage = "observe_exit_lifetime";
+    for (; exit_polls < 5000; ++exit_polls) {
+        pid_t observed_pid = 0;
+        intptr_t current_fd = -1, current_ucred = -1;
+        if (kernel_copyout(before.proc + KERNEL_OFFSET_PROC_P_PID,
+                           &observed_pid, sizeof(observed_pid)) ||
+            kernel_copyout(before.proc + KERNEL_OFFSET_PROC_P_FD,
+                           &current_fd, sizeof(current_fd)) ||
+            kernel_copyout(before.proc + KERNEL_OFFSET_PROC_P_UCRED,
+                           &current_ucred, sizeof(current_ucred))) {
+            error = EFAULT; goto done;
+        }
+        retained_proc = observed_pid == pid;
+        fd_cleared = current_fd == 0;
+        ucred_cleared = current_ucred == 0;
+        if (retained_proc && fd_cleared) break;
+        usleep(1000);
+    }
+    if (!retained_proc || !fd_cleared) { error = ETIMEDOUT; goto done; }
+    ps5log_printf(PS5LOG_MARK,
+                  "target_exit_lifetime build=%s retained_proc=1 private_fd_before=1 fd_cleared=1 ucred_cleared=%d polls=%u",
+                  LAPY_PROBE_ID, ucred_cleared, exit_polls);
+    error = reap_killed_target(pid, &reap_polls);
+    if (error) goto done;
+    target_reaped = 1;
+    attached = 0;
+#endif
 #if LAPY_SCAN_GADGET
     stage = "scan_gadget";
     if (ptrace(PT_GETREGS, pid, (caddr_t)&registers, 0)) {
@@ -332,7 +424,18 @@ int main(void)
 #endif
     stage = "complete";
 done:
+#if LAPY_EXIT_LIFETIME
+    if (attached && target_killed) {
+        int reap_error = reap_killed_target(pid, &reap_polls);
+        if (!reap_error) { target_reaped = 1; attached = 0; }
+        else if (!error) error = reap_error;
+    }
+#endif
+#if LAPY_EXIT_LIFETIME
+    if (attached && !target_killed) {
+#else
     if (attached) {
+#endif
         if (!stopped) goto held;
         if (ptrace(PT_DETACH, pid, (caddr_t)1, 0)) {
             error = errno ? errno : EIO;
@@ -356,8 +459,16 @@ done:
     }
     if (path[0]) {
         if (!unlink(path)) acknowledged = 1;
+        else if (LAPY_EXIT_LIFETIME && errno == ENOENT) acknowledged = 1;
         else if (!error) error = errno ? errno : EIO;
     }
+#if LAPY_EXIT_LIFETIME
+    ps5log_printf((retained_proc && fd_cleared && target_reaped) ?
+                  PS5LOG_MARK : PS5LOG_ERR,
+                  "exit_lifetime_result build=%s killed=%d retained_proc=%d fd_cleared=%d ucred_cleared=%d reaped=%d exit_polls=%u reap_polls=%u",
+                  LAPY_PROBE_ID, target_killed, retained_proc, fd_cleared,
+                  ucred_cleared, target_reaped, exit_polls, reap_polls);
+#endif
     ps5log_printf(error ? PS5LOG_ERR : PS5LOG_MARK,
                   "probe_result build=%s stage=%s error=%d polls=%u wait_polls=%u target_pid=%d attached=%d detached=%d acknowledged=%d threads=%u suspended=%u stable_stop=%d private_fd=%d private_self_cred=%d auth_restored=%d",
                   LAPY_PROBE_ID, stage, error, polls, wait_polls, (int)pid,
