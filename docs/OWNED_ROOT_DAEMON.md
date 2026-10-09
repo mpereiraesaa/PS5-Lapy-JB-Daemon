@@ -51,19 +51,22 @@ controlled tests. The SDK resolves its kernel addresses by firmware; the
 daemon also checks its assumed process layout, compares the raw `cr_ngroups`
 field with native `getgroups`, and validates the vnode counter offsets through
 a disposable native `rfork` child before changing a target.
-It fails closed if those checks fail. The layout and lifecycle have been
-validated on **FW 12.02 only**; other SDK-supported firmware is experimental.
-It does not silently fall back to `Hijacker::jailbreak(true)`.
+It fails closed if those checks fail. Repeat operation has been validated on
+FW 12.02, and the target-lifetime fix completed its delayed full transaction
+on FW 12.70; other SDK-supported firmware is experimental. It does not
+silently fall back to `Hijacker::jailbreak(true)`.
 
-If the launcher closes a requested title before any root slot is touched,
-the daemon now verifies that the original process identity has disappeared,
-reaps the two untouched native donors, and continues watching requests. A
-missing request marker is expected when the title's sandbox has already gone.
-If the original title is still present but credential restoration or ptrace
-detach fails, or if a root slot may have been touched, the daemon retains the
-`daemon_held` stop rather than guessing ownership. `target_drift` records the
-pre-transfer snapshot differences for diagnosis. This recovery path has not
-yet been exercised by a targeted title-exit race on the console.
+The daemon attaches and observes the ptrace stop before its first target
+kernel-pointer snapshot. If the title exits before that stop is observed, the
+daemon treats the request as vanished without dereferencing a cached target
+identity. Once stopped, it takes two stable snapshots before reading
+credentials or preparing donors. The request PID must also report the title ID
+from the sandbox that contained the marker, both before attach and again after
+the stop. If the original title is still present but credential restoration
+or ptrace detach fails, if the post-transfer root counts are not exactly two
+above baseline, or if a root slot may have been touched, the daemon retains
+the `daemon_held` stop rather than guessing ownership. `target_drift` records
+pre-transfer snapshot differences for diagnosis.
 
 Build with the installed SDK and the lab's `ps5log/1` client:
 
@@ -116,12 +119,41 @@ With the final group-field guard, native `getgroups` matched the stored field;
 the root layout check and a further `/data` read/write request also passed.
 That bounded ELF SHA-256 was
 `dc5b0aee1102d7f7aab6ccee65992dfdcb2144293b5eebb65829ba880ad8a554`.
-No other firmware was available for this test; passing the runtime preflight
-there must not be presented as completed console validation.
+Those earlier resident runs did not cover another firmware; passing the
+runtime preflight alone must not be presented as completed console validation.
 The temporary test title was restored to its original `eboot.bin` SHA-256
 `b62386902cef054114c1f3ae80bd5b665c175b0fb1a11c5b10e6d19d057fc5e3`.
 Private run logs and artifact hashes remain in the lab; they are not packaged
 into the public fork.
+
+The target-exit race was later reproduced and fixed on FW 12.70
+(`12700001`). With a two-second delay after the old pre-attach pointer lookup,
+the unfixed daemon observed the same `proc` but stale `filedesc` and `ucred`
+identities, then dereferenced those released objects. The fixed daemon held a
+ptrace stop before the first snapshot; under the same delay all three
+identities remained current, and credential elevation, root transfer, donor
+release, detach, and request completion succeeded. The fixed diagnostic ELF
+had build ID
+`7b856069da2d1b10601f9c3756e8d040df855d65c0018da439f2cb4b81324094`
+and SHA-256
+`a5210f810a13725293cd3efb434950e2a03fa2651aa4da0bb141ee8638117e24`.
+No kernel panic occurred in either controlled run; the stale dereference was
+confirmed directly. See `TARGET_EXIT_LIFETIME.md` for the reproduction and
+the exact unfixed artifact identity.
+
+The hardened one-shot mode then completed a full FW 12.70 lifecycle with build
+ID
+`5c86133420891935b5f98dee086c90ffbf8bee37b2943ed996179e8ffc2c654b`
+and SHA-256
+`249f0d0ce70d8b5a8159b3361741a3cdcda5e1488e118318e54dbae92b46cb46`.
+The system-root counters were `74/73` at baseline, `78/77` with both donors,
+`76/75` after donor teardown, and back to `74/73` after title exit. The title
+confirmed `/data` read/write, the daemon required `expected_two=1` before
+detach, and the final result reported `root_balanced=1`. A second signed title
+requested PID 2; the same payload rejected it at `target_identity` with no
+target snapshot, credential write, root transfer, or ptrace attachment. Both
+klog windows contained no kernel panic. The temporary title was restored and
+FTP, klog, and elfldr remained reachable.
 
 The cooperative test title preopened a result file in `/download0` before
 elevation and wrote its `/data` read/write result through that descriptor

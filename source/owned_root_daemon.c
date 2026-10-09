@@ -40,6 +40,9 @@ extern intptr_t kernel_get_ucred_prison(pid_t pid);
 #ifndef LAPY_ELF_HELPER
 #define LAPY_ELF_HELPER 0
 #endif
+#ifndef LAPY_TARGET_SNAPSHOT_DELAY_US
+#define LAPY_TARGET_SNAPSHOT_DELAY_US 0
+#endif
 #define TITLE_PREFIX TARGET_TITLE "_"
 #define SANDBOX_BASE "/mnt/sandbox"
 #define REQUEST_SUFFIX "/download0/elevate_proc"
@@ -82,6 +85,24 @@ struct credentials {
     uint8_t caps[16];
 };
 
+struct target_app_info {
+    uint32_t app_id;
+    uint64_t unknown1;
+    char title_id[14];
+    char unknown2[0x3c];
+};
+
+extern int sceKernelGetAppInfo(pid_t pid, struct target_app_info *info);
+
+static int target_title_matches(pid_t pid, const char expected[10])
+{
+    struct target_app_info info;
+    memset(&info, 0, sizeof(info));
+    return expected && expected[9] == 0 &&
+           sceKernelGetAppInfo(pid, &info) == 0 &&
+           !memcmp(info.title_id, expected, 10);
+}
+
 static int read_ptr(void *unused, intptr_t address, intptr_t *value)
 {
     (void)unused;
@@ -114,7 +135,8 @@ static int sample_root(intptr_t root, const char *phase,
     return 0;
 }
 
-static int snapshot(pid_t pid, struct snapshot *out)
+static int snapshot_with_delay(pid_t pid, struct snapshot *out,
+                               unsigned delay_us)
 {
     pid_t observed = 0;
     intptr_t current = 0, owner = 0, next = 0;
@@ -126,8 +148,18 @@ static int snapshot(pid_t pid, struct snapshot *out)
     out->fd = kernel_get_proc_filedesc(pid);
     out->ucred = kernel_get_proc_ucred(pid);
     out->prison = kernel_get_ucred_prison(pid);
-    if (!out->fd || !out->ucred || !out->prison ||
-        kernel_copyout(out->fd + FD_REFCNT, &out->fd_refs,
+    if (!out->fd || !out->ucred || !out->prison) return EFAULT;
+    if (delay_us) {
+        usleep(delay_us);
+        ps5log_printf(PS5LOG_MARK,
+                      "target_snapshot_delay build=%s pid=%d proc_current=%d fd_current=%d ucred_current=%d delay_us=%u",
+                      LAPY_OWNED_ID, pid,
+                      kernel_get_proc(pid) == out->proc,
+                      kernel_get_proc_filedesc(pid) == out->fd,
+                      kernel_get_proc_ucred(pid) == out->ucred,
+                      delay_us);
+    }
+    if (kernel_copyout(out->fd + FD_REFCNT, &out->fd_refs,
                        sizeof(out->fd_refs)) ||
         kernel_copyout(out->ucred + UCRED_REF, &out->cred_refs,
                        sizeof(out->cred_refs)) ||
@@ -151,6 +183,11 @@ static int snapshot(pid_t pid, struct snapshot *out)
         current = next;
     }
     return out->count ? 0 : EPROTO;
+}
+
+static int snapshot(pid_t pid, struct snapshot *out)
+{
+    return snapshot_with_delay(pid, out, 0);
 }
 
 static int same_stop(const struct snapshot *a, const struct snapshot *b)
@@ -207,7 +244,8 @@ static pid_t parse_pid(const char *message)
            -1 : (pid_t)value;
 }
 
-static int find_request(char path[512], pid_t *pid, time_t started)
+static int find_request(char path[512], char title[10], pid_t *pid,
+                        time_t started)
 {
     DIR *directory = opendir(SANDBOX_BASE);
     if (!directory) return errno == ENOENT ? 0 : -(errno ? errno : EIO);
@@ -241,6 +279,10 @@ static int find_request(char path[512], pid_t *pid, time_t started)
         message[size] = 0;
         *pid = parse_pid(message);
         result = *pid > 1 ? 1 : -EINVAL;
+        if (result > 0) {
+            memcpy(title, entry->d_name, 9);
+            title[9] = 0;
+        }
         break;
     }
     closedir(directory);
@@ -529,30 +571,34 @@ static int set_credentials(pid_t pid, intptr_t ucred,
     return !error && credentials_match(pid, value, ucred) ? 0 : EIO;
 }
 
-static int await_target_stop(pid_t pid, const struct snapshot *before,
-                             struct snapshot *stopped)
+static int await_target_stop(pid_t pid, struct snapshot *before,
+                             struct snapshot *stopped,
+                             int *stop_observed, int *target_reaped)
 {
     int status = 0;
+    *stop_observed = 0;
+    *target_reaped = 0;
     for (unsigned i = 0; i < 100; ++i) {
         pid_t result = waitpid(pid, &status, WNOHANG | WUNTRACED);
         if (result == pid) {
+            if (WIFEXITED(status) || WIFSIGNALED(status)) {
+                *target_reaped = 1;
+                return ESRCH;
+            }
             if (!WIFSTOPPED(status)) return EPROTO;
+            *stop_observed = 1;
             break;
         }
         if (result < 0) return errno ? errno : ECHILD;
         if (i == 99) return ETIMEDOUT;
         usleep(50000);
     }
-    struct snapshot first;
-    int error = snapshot(pid, &first);
+    int error = snapshot_with_delay(pid, before,
+                                    LAPY_TARGET_SNAPSHOT_DELAY_US);
     if (error) return error;
     usleep(50000);
     if ((error = snapshot(pid, stopped))) return error;
-    return first.proc == before->proc && first.fd == before->fd &&
-           first.ucred == before->ucred &&
-           first.prison == before->prison &&
-           first.cred_refs == 2 &&
-           same_stop(&first, stopped) ? 0 : EBUSY;
+    return before->cred_refs == 2 && same_stop(before, stopped) ? 0 : EBUSY;
 }
 
 /* A traced title can be killed by its launcher while we prepare donors.
@@ -565,6 +611,18 @@ static int original_target_gone(pid_t pid, intptr_t original_proc)
         if (kernel_get_proc(pid) != original_proc) {
             usleep(10000);
             if (kernel_get_proc(pid) != original_proc) return 1;
+        }
+        usleep(50000);
+    }
+    return 0;
+}
+
+static int target_pid_gone(pid_t pid)
+{
+    for (unsigned i = 0; i < 20; ++i) {
+        if (!kernel_get_proc(pid)) {
+            usleep(10000);
+            if (!kernel_get_proc(pid)) return 1;
         }
         usleep(50000);
     }
@@ -597,41 +655,26 @@ static int transferred_target_gone(pid_t pid, intptr_t original_proc,
 
 static int run_one(pid_t pid, intptr_t system_root,
                    const struct lapy_vnode_ref_counts *baseline,
-                   size_t thread_credential_offset)
+                   size_t thread_credential_offset,
+                   const char expected_title[10])
 {
     struct child first = {.pid = -1};
     struct child second = {.pid = -1};
-    struct snapshot before, stopped, confirmed, donor;
+    struct snapshot before = {0}, stopped, confirmed, donor;
     struct credentials original, elevated;
     struct lapy_slot_io io = {read_ptr, write_ptr, 0};
     struct lapy_vnode_ref_counts sample;
     uint64_t self_authid = 0;
     int error = 0, attached = 0, stopped_target = 0;
     int auth_changed = 0, cred_changed = 0, moved = 0, detached = 0;
+    int target_reaped = 0;
     int roots_touched = 0;
     const char *stage = "target_preflight";
 
-    if ((error = snapshot(pid, &before))) goto done;
-    ps5log_printf(PS5LOG_MARK,
-                  "target_state build=%s pid=%d fd_refs=%u cred_refs=%u threads=%u suspended=%u root_old=%d jail_old=%d prison0=%d",
-                  LAPY_OWNED_ID, pid, before.fd_refs, before.cred_refs,
-                  before.count, before.suspended,
-                  before.root && before.root != system_root,
-                  before.jail && before.jail != system_root,
-                  before.prison == KERNEL_ADDRESS_PRISON0);
-    if (before.fd_refs != 1 ||
-        before.suspended || !before.root || !before.jail ||
-        before.root == system_root || before.jail == system_root ||
-        before.prison != KERNEL_ADDRESS_PRISON0 ||
-        !private_process_credential(&before, thread_credential_offset)) {
-        error = EBUSY; goto done;
+    stage = "target_identity";
+    if (!target_title_matches(pid, expected_title)) {
+        error = ESRCH; goto done;
     }
-    if ((error = save_credentials(pid, before.ucred, &original))) goto done;
-    ps5log_printf(PS5LOG_MARK,
-                  "target_preflight build=%s pid=%d private_fd=1 private_cred=1 threads=%u root_jail_alias=%d cwd_old=%d",
-                  LAPY_OWNED_ID, pid, before.count,
-                  before.root == before.jail,
-                  before.cwd == before.root);
     stage = "tracer_authority";
     self_authid = kernel_get_ucred_authid(getpid());
     if (!self_authid || kernel_set_ucred_authid(getpid(), PTRACE_AUTHID) ||
@@ -645,11 +688,38 @@ static int run_one(pid_t pid, intptr_t system_root,
     }
     attached = 1;
     stage = "target_stop";
-    if ((error = await_target_stop(pid, &before, &stopped))) {
-        if (original_target_gone(pid, before.proc)) goto target_gone;
-        goto held;
+    if ((error = await_target_stop(pid, &before, &stopped,
+                                   &stopped_target, &target_reaped))) {
+        if (target_reaped) {
+            attached = 0;
+            goto target_gone;
+        }
+        goto done;
     }
-    stopped_target = 1;
+    stage = "target_identity_stopped";
+    if (!target_title_matches(pid, expected_title)) {
+        error = ESRCH; goto done;
+    }
+    stage = "target_preflight";
+    ps5log_printf(PS5LOG_MARK,
+                  "target_state build=%s pid=%d fd_refs=%u cred_refs=%u threads=%u suspended=%u root_old=%d jail_old=%d prison0=%d",
+                  LAPY_OWNED_ID, pid, before.fd_refs, before.cred_refs,
+                  before.count, before.suspended,
+                  before.root && before.root != system_root,
+                  before.jail && before.jail != system_root,
+                  before.prison == KERNEL_ADDRESS_PRISON0);
+    if (before.fd_refs != 1 || !before.root || !before.jail ||
+        before.root == system_root || before.jail == system_root ||
+        before.prison != KERNEL_ADDRESS_PRISON0 ||
+        !private_process_credential(&before, thread_credential_offset)) {
+        error = EBUSY; goto done;
+    }
+    if ((error = save_credentials(pid, before.ucred, &original))) goto done;
+    ps5log_printf(PS5LOG_MARK,
+                  "target_preflight build=%s pid=%d private_fd=1 private_cred=1 threads=%u root_jail_alias=%d cwd_old=%d",
+                  LAPY_OWNED_ID, pid, before.count,
+                  before.root == before.jail,
+                  before.cwd == before.root);
     ps5log_printf(PS5LOG_MARK,
                   "target_stopped build=%s pid=%d threads=%u private_fd=1 private_cred=1",
                   LAPY_OWNED_ID, pid, stopped.count);
@@ -757,11 +827,13 @@ static int run_one(pid_t pid, intptr_t system_root,
         (error = release_child(&second))) goto held;
     if ((error = sample_root(system_root, "donors_reaped", &sample)))
         goto held;
+    int expected_two = lapy_vnode_ref_probe_added_two(baseline, &sample);
     ps5log_printf(PS5LOG_MARK,
                   "donor_balance build=%s expected_two=%d",
-                  LAPY_OWNED_ID,
-                  sample.hold == baseline->hold + 2 &&
-                  sample.use == baseline->use + 2);
+                  LAPY_OWNED_ID, expected_two);
+    if (!expected_two) {
+        error = EPROTO; goto held;
+    }
     stage = "detach";
     if (ptrace(PT_DETACH, pid, (caddr_t)1, 0)) {
         error = errno ? errno : EIO;
@@ -799,8 +871,9 @@ rollback:
 done:
     if (attached) {
         if (!stopped_target) {
-            if (!roots_touched && original_target_gone(pid, before.proc))
-                goto target_gone;
+            if (!roots_touched &&
+                ((before.proc && original_target_gone(pid, before.proc)) ||
+                 (!before.proc && target_pid_gone(pid)))) goto target_gone;
             goto held;
         }
         if (ptrace(PT_DETACH, pid, (caddr_t)1, 0)) {
@@ -847,14 +920,6 @@ held:
 }
 
 #if LAPY_ELF_HELPER
-struct helper_app_info {
-    uint32_t app_id;
-    uint64_t unknown1;
-    char title_id[14];
-    char unknown2[0x3c];
-};
-extern int sceKernelGetAppInfo(pid_t pid, struct helper_app_info *info);
-
 static int helper_transfer(int fd, void *buffer, size_t size, int writing)
 {
     unsigned char *bytes = buffer;
@@ -876,14 +941,6 @@ static int helper_message_matches(const struct lapy_elevation_message *message,
            message->size == sizeof(*message) && message->kind == kind &&
            message->capability == request->capability &&
            message->pid == request->pid;
-}
-
-static int helper_target_title_matches(pid_t pid)
-{
-    struct helper_app_info info;
-    memset(&info, 0, sizeof(info));
-    return sceKernelGetAppInfo(pid, &info) == 0 &&
-           !memcmp(info.title_id, TARGET_TITLE, sizeof(TARGET_TITLE));
 }
 
 static uint32_t helper_status_for_error(int error)
@@ -911,7 +968,7 @@ static int run_helper_request(intptr_t root,
     else if (request.kind != LAPY_ELEVATION_REQUEST || request.pid <= 1 ||
              request.capability != LAPY_ELEVATION_FILESYSTEM || request.status)
         status = LAPY_ELEVATION_UNSUPPORTED_CAPABILITY;
-    else if (!helper_target_title_matches((pid_t)request.pid))
+    else if (!target_title_matches((pid_t)request.pid, TARGET_TITLE))
         status = LAPY_ELEVATION_TARGET_MISMATCH;
 
     if (status != LAPY_ELEVATION_OK) goto respond;
@@ -934,7 +991,7 @@ static int run_helper_request(intptr_t root,
         goto respond;
     }
     /* Recheck the PID/title after the cooperative credential clone. */
-    if (!helper_target_title_matches((pid_t)request.pid)) {
+    if (!target_title_matches((pid_t)request.pid, TARGET_TITLE)) {
         status = LAPY_ELEVATION_TARGET_MISMATCH;
         goto respond;
     }
@@ -943,7 +1000,7 @@ static int run_helper_request(intptr_t root,
         goto respond;
     }
     error = run_one((pid_t)request.pid, root, &baseline,
-                    thread_credential_offset);
+                    thread_credential_offset, TARGET_TITLE);
     status = error ? helper_status_for_error(error) : LAPY_ELEVATION_OK;
 
 respond:
@@ -960,6 +1017,7 @@ int main(void)
 {
 #if !LAPY_ELF_HELPER
     char path[512] = {0};
+    char request_title[10] = {0};
 #endif
 #if !LAPY_SERVICE || LAPY_REQUIRE_CLIENT_RESULT
 #if !LAPY_ELF_HELPER
@@ -977,7 +1035,15 @@ int main(void)
     size_t thread_credential_offset = 0;
     int error = 0, acknowledged = 0;
     const char *stage = "preflight";
+#ifdef LAPY_RESULT_FILE
+    int mirror_fd = open(LAPY_RESULT_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (mirror_fd < 0) return 2;
+    ps5log_set_mirror_fd(mirror_fd);
+#endif
     int logging_ready = ps5log_init_default("LAPYOWN", "lapy-owned-root-daemon") == 0;
+#ifdef LAPY_RESULT_FILE
+    logging_ready = 1;
+#endif
 #if !LAPY_ELF_HELPER
     if (!logging_ready) return 2;
 #endif
@@ -1047,18 +1113,22 @@ int main(void)
     stage = "root_layout";
     if ((error = validate_root_reference_layout(root, self.fd)))
         goto done;
+    ps5log_printf(PS5LOG_MARK,
+                  "daemon_ready build=%s title=%s service=%d",
+                  LAPY_OWNED_ID, TARGET_TITLE, LAPY_SERVICE);
 #if LAPY_ELF_HELPER
     stage = "helper_request";
     error = run_helper_request(root, thread_credential_offset) ? EIO : 0;
 #elif LAPY_SERVICE
     for (unsigned completed = 0;;) {
         path[0] = 0;
+        request_title[0] = 0;
         pid = -1;
         acknowledged = 0;
         stage = "find_request";
         int found = 0;
         for (unsigned polls = 0; polls < 600; ++polls) {
-            found = find_request(path, &pid, started);
+            found = find_request(path, request_title, &pid, started);
             if (found < 0) { error = -found; goto done; }
             if (found) break;
             usleep(100000);
@@ -1068,7 +1138,7 @@ int main(void)
         if ((error = sample_root(root, "before_request", &baseline)))
             goto done;
         error = run_one(pid, root, &baseline,
-                        thread_credential_offset);
+                        thread_credential_offset, request_title);
         if (path[0] && !unlink(path)) acknowledged = 1;
         else if (error == ESRCH && errno == ENOENT) acknowledged = 1;
         else if (!error) error = errno ? errno : EIO;
@@ -1096,7 +1166,7 @@ int main(void)
     if ((error = sample_root(root, "baseline", &baseline))) goto done;
     stage = "find_request";
     for (unsigned polls = 0; polls < 600; ++polls) {
-        int found = find_request(path, &pid, started);
+        int found = find_request(path, request_title, &pid, started);
         if (found < 0) { error = -found; goto done; }
         if (found) break;
         if (polls == 599) { error = ETIMEDOUT; goto done; }
@@ -1104,7 +1174,8 @@ int main(void)
     }
     stage = "request";
     if ((error = client_result_path(path, result_path))) goto done;
-    error = run_one(pid, root, &baseline, thread_credential_offset);
+    error = run_one(pid, root, &baseline, thread_credential_offset,
+                    request_title);
     if (path[0] && !unlink(path)) acknowledged = 1;
     else if (!error) error = errno ? errno : EIO;
     if (error) goto done;
@@ -1140,5 +1211,8 @@ done:
                   final.use == baseline.use);
     if (logging_ready)
         ps5log_close(error ? "daemon-failed" : "daemon-complete");
+#ifdef LAPY_RESULT_FILE
+    close(mirror_fd);
+#endif
     return error ? 1 : 0;
 }
