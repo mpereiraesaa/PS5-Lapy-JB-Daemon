@@ -55,7 +55,10 @@ def main():
     paths += [Path(__file__).resolve(), logging / "ps5log.h"]
     if not all(path.is_file() for path in paths):
         raise FileNotFoundError("candidate source or logging client missing")
-    inputs = {str(path): digest(path) for path in paths}
+    # Key inputs by location-independent names so the identity, and the ELF that embeds it, are
+    # the same in every checkout.
+    names = [f"source/{name}" for name in SOURCES] + ["tools/build_owned_daemon.py", "logging/ps5log.h"]
+    inputs = {name: digest(path) for name, path in zip(names, paths)}
     sdk_inputs = {str(path.relative_to(sdk)): digest(path)
                   for path in sorted((sdk / "target").rglob("*"))
                   if path.is_file()}
